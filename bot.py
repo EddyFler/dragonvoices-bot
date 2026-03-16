@@ -15,6 +15,8 @@ TOPICS_FILE = "topics.json"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+# ---------- загрузка / сохранение ----------
+
 def load_json(path):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -47,10 +49,14 @@ async def start(message: types.Message):
 
     await message.answer("Введи свой ник актёра.")
 
-@dp.message(F.from_user.id.in_(lambda: waiting_for_nick.keys()))
+@dp.message()
 async def save_nick(message: types.Message):
 
     user_id = message.from_user.id
+
+    if user_id not in waiting_for_nick:
+        return
+
     nick = message.text.strip()
 
     actors[nick] = {
@@ -62,7 +68,7 @@ async def save_nick(message: types.Message):
 
     waiting_for_nick.pop(user_id)
 
-    await message.answer(f"Ник сохранён: {nick}")
+    await message.answer(f"Ник сохранён: {nick}. Теперь ты будешь получать задания.")
 
 # ---------- ping ----------
 
@@ -101,7 +107,7 @@ def is_subtitles(message: types.Message):
 
     return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
 
-# ---------- авто панель ----------
+# ---------- автоматическая панель ----------
 
 @dp.message(F.document)
 async def subtitles_detect(message: types.Message):
@@ -120,7 +126,7 @@ async def subtitles_detect(message: types.Message):
 
     await message.reply("🎬 Панель серии", reply_markup=keyboard)
 
-# ---------- меню актёров ----------
+# ---------- меню выбора актёров ----------
 
 def build_actor_menu(message_id):
 
@@ -160,9 +166,12 @@ async def open_actor_menu(callback: types.CallbackQuery):
 
     keyboard = build_actor_menu(message_id)
 
-    await callback.message.edit_text("Выберите актёров:", reply_markup=keyboard)
+    await callback.message.edit_text(
+        "Выберите актёров:",
+        reply_markup=keyboard
+    )
 
-# ---------- переключение ----------
+# ---------- переключение галочек ----------
 
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_actor(callback: types.CallbackQuery):
@@ -245,7 +254,7 @@ async def send_task(callback: types.CallbackQuery):
 
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
-# ---------- статусы ----------
+# ---------- обновление статусов ----------
 
 async def update_status(callback, status, task_id, stop_timer=False):
 
