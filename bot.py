@@ -1,5 +1,6 @@
 import logging
 import os
+import json
 from aiohttp import web
 
 import gspread
@@ -14,7 +15,6 @@ from aiogram.types import (
     Update
 )
 from aiogram.filters import Command
-
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -39,14 +39,17 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds = Credentials.from_service_account_file(
-    "credentials.json",
+with open("credentials.json") as f:
+    creds_dict = json.load(f)
+
+creds = Credentials.from_service_account_info(
+    creds_dict,
     scopes=scope
 )
 
 client = gspread.authorize(creds)
 
-spreadsheet = client.open("dragonvoices_bot")
+spreadsheet = client.open_by_key("1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0")
 
 actors_sheet = spreadsheet.worksheet("actors")
 topics_sheet = spreadsheet.worksheet("topics")
@@ -167,6 +170,7 @@ async def ensure_topic_saved(message):
 
 task_status = {}
 status_messages = {}
+task_meta = {}
 
 
 def build_status_text(task_id):
@@ -351,7 +355,9 @@ async def send_task(callback: types.CallbackQuery):
 
     topic = get_topic(chat_id, thread_id) or "Без темы"
 
-    task_id = str(message_id)
+    task_id = f"{chat_id}_{message_id}"
+
+    task_meta[task_id] = (chat_id, thread_id)
 
     task_status[task_id] = {}
 
@@ -409,11 +415,13 @@ async def update_status(status, task_id, actor):
 
     msg_id = status_messages.get(task_id)
 
+    chat_id, thread_id = task_meta[task_id]
+
     if msg_id:
 
         await bot.edit_message_text(
             text=build_status_text(task_id),
-            chat_id=list(bot._sessions.keys())[0],
+            chat_id=chat_id,
             message_id=msg_id
         )
 
@@ -464,7 +472,7 @@ async def webhook_handler(request):
 
         logging.exception("Webhook error")
 
-    return web.Response()
+    return web.Response(text="ok")
 
 
 async def on_startup(app):
