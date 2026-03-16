@@ -1,12 +1,16 @@
-import asyncio
 import json
 import os
 import logging
 from aiohttp import web
 
 from aiogram import Bot, Dispatcher, types, F
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
-from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
+from aiogram.types import (
+    InlineKeyboardMarkup,
+    InlineKeyboardButton,
+    ReplyKeyboardMarkup,
+    KeyboardButton,
+    Update
+)
 from aiogram.filters import Command
 
 from aiogram.fsm.context import FSMContext
@@ -74,7 +78,7 @@ def find_actor_by_id(user_id):
     return None
 
 
-# ---------- получение названия темы ----------
+# -------- получение названия темы --------
 
 async def get_topic_name(message):
 
@@ -101,21 +105,15 @@ async def ensure_topic_saved(message: types.Message):
     name = await get_topic_name(message)
 
     if name:
-
         topics[key] = name
         save_json(TOPICS_FILE, topics)
 
-        logging.info(f"Topic updated: {key} -> {name}")
-
     elif key not in topics:
-
         topics[key] = f"Тема {message.message_thread_id}"
         save_json(TOPICS_FILE, topics)
 
-        logging.info(f"Topic fallback saved: {key}")
 
-
-# ---------- регистрация ----------
+# -------- регистрация --------
 
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
@@ -131,7 +129,6 @@ async def start(message: types.Message, state: FSMContext):
         return
 
     await state.set_state(Register.entering_nick)
-
     await message.answer("Введи свой ник актёра.")
 
 
@@ -161,7 +158,7 @@ async def save_nick(message: types.Message, state: FSMContext):
     )
 
 
-# ---------- меню ----------
+# -------- меню --------
 
 @dp.message(F.text == "🎭 Мой ник")
 async def my_nick(message: types.Message):
@@ -170,15 +167,10 @@ async def my_nick(message: types.Message):
     nick = find_actor_by_id(user_id)
 
     if not nick:
-        await message.answer("Ты ещё не зарегистрирован. Напиши /start")
+        await message.answer("Ты ещё не зарегистрирован.")
         return
 
-    username = message.from_user.username
-
-    await message.answer(
-        f"🎭 Твой ник: {nick}\n"
-        f"📨 Telegram: @{username}"
-    )
+    await message.answer(f"🎭 Твой ник: {nick}")
 
 
 @dp.message(F.text == "✏ Сменить ник")
@@ -188,14 +180,14 @@ async def change_nick(message: types.Message, state: FSMContext):
     await message.answer("Введи новый ник.")
 
 
-# ---------- ping ----------
+# -------- ping --------
 
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
 
-# ---------- темы ----------
+# -------- темы --------
 
 @dp.message(F.forum_topic_created)
 async def topic_created(message: types.Message):
@@ -215,7 +207,7 @@ async def topic_edited(message: types.Message):
     save_json(TOPICS_FILE, topics)
 
 
-# ---------- субтитры ----------
+# -------- субтитры --------
 
 def is_subtitles(message: types.Message):
 
@@ -247,7 +239,7 @@ async def subtitles_detect(message: types.Message):
     await message.reply("🎬 Панель серии", reply_markup=keyboard)
 
 
-# ---------- меню актёров ----------
+# -------- меню актёров --------
 
 def build_actor_menu(message_id):
 
@@ -294,8 +286,6 @@ async def open_actor_menu(callback: types.CallbackQuery):
     )
 
 
-# ---------- переключение ----------
-
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_actor(callback: types.CallbackQuery):
 
@@ -315,7 +305,7 @@ async def toggle_actor(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
 
-# ---------- отправка задания ----------
+# -------- отправка задания --------
 
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
@@ -380,14 +370,77 @@ async def send_task(callback: types.CallbackQuery):
             )
 
         except Exception as e:
-
             logging.error(f"Cannot send task to {actor_name}: {e}")
 
     await callback.answer()
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
 
-# ---------- webhook ----------
+# -------- статусы --------
+
+async def update_status(callback, status, task_id, stop_timer=False):
+
+    keyboard = callback.message.reply_markup
+
+    lines = callback.message.text.split("\n")
+    new_lines = []
+
+    for line in lines:
+        if not line.startswith("Статус:"):
+            new_lines.append(line)
+
+    new_lines.append(f"Статус: {status}")
+
+    await callback.message.edit_text("\n".join(new_lines), reply_markup=keyboard)
+
+    task = tasks.get(task_id)
+
+    if task:
+
+        user = callback.from_user.username or callback.from_user.first_name
+
+        await bot.send_message(
+            chat_id=task["chat"],
+            message_thread_id=task["thread"],
+            reply_to_message_id=task["original"],
+            text=f"{status} @{user}\n📂 {task['topic']}\n🔗 {task['link']}"
+        )
+
+        if stop_timer:
+            del tasks[task_id]
+
+
+@dp.callback_query(F.data.startswith("seen:"))
+async def seen(callback: types.CallbackQuery):
+
+    task_id = callback.data.split(":")[1]
+
+    await update_status(callback, "👀 Увидел", task_id, False)
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("done:"))
+async def done(callback: types.CallbackQuery):
+
+    task_id = callback.data.split(":")[1]
+
+    await update_status(callback, "🎤 Записано", task_id, True)
+
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("skip:"))
+async def skip(callback: types.CallbackQuery):
+
+    task_id = callback.data.split(":")[1]
+
+    await update_status(callback, "❌ Не участвует", task_id, True)
+
+    await callback.answer()
+
+
+# -------- webhook --------
 
 async def webhook_handler(request):
 
@@ -403,12 +456,8 @@ async def webhook_handler(request):
 
 async def on_startup(app):
 
-    logging.info("Setting webhook")
-
     await bot.delete_webhook(drop_pending_updates=True)
     await bot.set_webhook(WEBHOOK_URL)
-
-    logging.info("Webhook installed")
 
 
 async def on_shutdown(app):
