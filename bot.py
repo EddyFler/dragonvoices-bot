@@ -20,6 +20,8 @@ TOPICS_FILE = "topics.json"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
+logging.basicConfig(level=logging.INFO)
+
 # ---------------- JSON ----------------
 
 def load_json(path):
@@ -51,7 +53,6 @@ async def start(message: types.Message):
         return
 
     waiting_for_nick[user_id] = True
-
     await message.answer("Введи свой ник актёра.")
 
 @dp.message()
@@ -109,7 +110,6 @@ def is_subtitles(message: types.Message):
         return False
 
     name = message.document.file_name.lower()
-
     return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
 
 @dp.message(F.document)
@@ -314,15 +314,24 @@ async def skip(callback: types.CallbackQuery):
 # ---------------- webhook сервер ----------------
 
 async def webhook_handler(request):
-    data = await request.json()
-    update = Update.model_validate(data)
-    await dp.feed_update(bot, update)
+
+    try:
+        data = await request.json()
+        update = Update.model_validate(data)
+        await dp.feed_update(bot, update)
+    except Exception as e:
+        logging.exception(e)
+
     return web.Response()
 
 async def on_startup(app):
+
+    logging.info("Setting webhook...")
     await bot.set_webhook(WEBHOOK_URL)
 
 async def on_shutdown(app):
+
+    logging.info("Deleting webhook...")
     await bot.delete_webhook()
 
 def create_app():
@@ -340,6 +349,8 @@ def create_app():
 
 if __name__ == "__main__":
 
-    logging.basicConfig(level=logging.INFO)
+    port = int(os.environ.get("PORT", 10000))
 
-    web.run_app(create_app(), host="0.0.0.0", port=10000)
+    logging.info(f"Starting server on port {port}")
+
+    web.run_app(create_app(), host="0.0.0.0", port=port)
