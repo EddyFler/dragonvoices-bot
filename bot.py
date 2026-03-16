@@ -30,13 +30,9 @@ storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
 
-# ---------- FSM ----------
-
 class Register(StatesGroup):
     entering_nick = State()
 
-
-# ---------- меню пользователя ----------
 
 user_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -46,8 +42,6 @@ user_menu = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
-
-# ---------- JSON ----------
 
 def load_json(path):
     if os.path.exists(path):
@@ -67,34 +61,8 @@ tasks = {}
 actor_selection = {}
 
 
-# ---------- helpers ----------
-
 def topic_key(chat_id, thread_id):
     return f"{chat_id}:{thread_id}"
-
-
-def ensure_topic_saved(message: types.Message):
-
-    if not message.message_thread_id:
-        return
-
-    key = topic_key(message.chat.id, message.message_thread_id)
-
-    if key not in topics:
-
-        name = None
-
-        if message.forum_topic_created:
-            name = message.forum_topic_created.name
-
-        if message.forum_topic_edited:
-            name = message.forum_topic_edited.name
-
-        if not name:
-            name = message.chat.title
-
-        topics[key] = name
-        save_json(TOPICS_FILE, topics)
 
 
 def find_actor_by_id(user_id):
@@ -104,6 +72,47 @@ def find_actor_by_id(user_id):
             return nick
 
     return None
+
+
+# ---------- получение названия темы ----------
+
+async def get_topic_name(message):
+
+    if message.reply_to_message:
+        if message.reply_to_message.forum_topic_created:
+            return message.reply_to_message.forum_topic_created.name
+
+    if message.forum_topic_created:
+        return message.forum_topic_created.name
+
+    if message.forum_topic_edited:
+        return message.forum_topic_edited.name
+
+    return None
+
+
+async def ensure_topic_saved(message: types.Message):
+
+    if not message.message_thread_id:
+        return
+
+    key = topic_key(message.chat.id, message.message_thread_id)
+
+    name = await get_topic_name(message)
+
+    if name:
+
+        topics[key] = name
+        save_json(TOPICS_FILE, topics)
+
+        logging.info(f"Topic updated: {key} -> {name}")
+
+    elif key not in topics:
+
+        topics[key] = f"Тема {message.message_thread_id}"
+        save_json(TOPICS_FILE, topics)
+
+        logging.info(f"Topic fallback saved: {key}")
 
 
 # ---------- регистрация ----------
@@ -192,6 +201,7 @@ async def ping(message: types.Message):
 async def topic_created(message: types.Message):
 
     key = topic_key(message.chat.id, message.message_thread_id)
+
     topics[key] = message.forum_topic_created.name
     save_json(TOPICS_FILE, topics)
 
@@ -200,6 +210,7 @@ async def topic_created(message: types.Message):
 async def topic_edited(message: types.Message):
 
     key = topic_key(message.chat.id, message.message_thread_id)
+
     topics[key] = message.forum_topic_edited.name
     save_json(TOPICS_FILE, topics)
 
@@ -219,7 +230,7 @@ def is_subtitles(message: types.Message):
 @dp.message(F.document)
 async def subtitles_detect(message: types.Message):
 
-    ensure_topic_saved(message)
+    await ensure_topic_saved(message)
 
     if not is_subtitles(message):
         return
@@ -373,7 +384,6 @@ async def send_task(callback: types.CallbackQuery):
             logging.error(f"Cannot send task to {actor_name}: {e}")
 
     await callback.answer()
-
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
 
@@ -418,8 +428,6 @@ def create_app():
 
     return app
 
-
-# ---------- запуск ----------
 
 if __name__ == "__main__":
 
