@@ -37,7 +37,7 @@ class Register(StatesGroup):
     entering_nick = State()
 
 
-# ---------- меню пользователя ----------
+# ---------- пользовательское меню ----------
 
 user_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -451,30 +451,18 @@ async def skip(callback: types.CallbackQuery):
 
 async def webhook_handler(request):
 
-    data = await request.json()
+    try:
 
-    update = Update.model_validate(data)
+        data = await request.json()
 
-    await dp.feed_update(bot, update)
+        update = Update.model_validate(data)
+
+        await dp.feed_update(bot, update)
+
+    except Exception as e:
+        logging.exception(f"Webhook error: {e}")
 
     return web.Response(text="ok")
-
-
-async def on_startup(app):
-
-    logging.info("Reset webhook")
-
-    await bot.delete_webhook(drop_pending_updates=True)
-
-    await bot.set_webhook(WEBHOOK_URL)
-
-    logging.info("Webhook set")
-
-
-async def on_shutdown(app):
-
-    await bot.delete_webhook()
-    await bot.session.close()
 
 
 def create_app():
@@ -483,16 +471,27 @@ def create_app():
 
     app.router.add_post(WEBHOOK_PATH, webhook_handler)
 
-    app.on_startup.append(on_startup)
-    app.on_shutdown.append(on_shutdown)
-
     return app
 
 
+# ---------- запуск ----------
+
 if __name__ == "__main__":
 
-    port = int(os.environ.get("PORT", 10000))
+    async def main():
 
-    logging.info(f"Starting server on port {port}")
+        logging.info("Installing webhook")
 
-    web.run_app(create_app(), host="0.0.0.0", port=port)
+        await bot.delete_webhook(drop_pending_updates=True)
+
+        await bot.set_webhook(WEBHOOK_URL)
+
+        logging.info("Webhook installed")
+
+        app = create_app()
+
+        port = int(os.environ.get("PORT", 10000))
+
+        web.run_app(app, host="0.0.0.0", port=port)
+
+    asyncio.run(main())
