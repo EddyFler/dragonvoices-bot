@@ -39,9 +39,8 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-
-with open(os.path.join(BASE_DIR, "credentials.json"), "r") as f:
+# Читаем credentials из Render Secret Files
+with open("/etc/secrets/credentials.json", "r") as f:
     creds_dict = json.load(f)
 
 # фикс для Render
@@ -474,7 +473,7 @@ async def webhook_handler(request):
 
         await dp.feed_update(bot, update)
 
-    except Exception as e:
+    except Exception:
 
         logging.exception("Webhook error")
 
@@ -491,7 +490,6 @@ async def on_startup(app):
 async def on_shutdown(app):
 
     await bot.delete_webhook()
-
     await bot.session.close()
 
 
