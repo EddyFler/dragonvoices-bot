@@ -1,7 +1,9 @@
-import json
-import os
 import logging
+import os
 from aiohttp import web
+
+import gspread
+from google.oauth2.service_account import Credentials
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import (
@@ -18,21 +20,40 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 
-TOKEN = "8618936533:AAGPKLwykJl4RWzTukDB4mXUd12bGaPZPFk"
+TOKEN = "ТВОЙ_ТОКЕН"
 
 BASE_URL = "https://dragonvoices-bot.onrender.com"
 WEBHOOK_PATH = "/webhook"
 WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
 
-ACTORS_FILE = "actors.json"
-TOPICS_FILE = "topics.json"
-
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=TOKEN)
-storage = MemoryStorage()
-dp = Dispatcher(storage=storage)
+dp = Dispatcher(storage=MemoryStorage())
 
+
+# ---------- GOOGLE SHEETS ----------
+
+scope = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+creds = Credentials.from_service_account_file(
+    "credentials.json",
+    scopes=scope
+)
+
+client = gspread.authorize(creds)
+
+spreadsheet = client.open("dragonvoices_bot")
+
+actors_sheet = spreadsheet.worksheet("actors")
+topics_sheet = spreadsheet.worksheet("topics")
+tasks_sheet = spreadsheet.worksheet("tasks")
+
+
+# ---------- FSM ----------
 
 class Register(StatesGroup):
     entering_nick = State()
@@ -47,41 +68,70 @@ user_menu = ReplyKeyboardMarkup(
 )
 
 
-def load_json(path):
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return json.load(f)
-    return {}
-
-
-def save_json(path, data):
-    with open(path, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-actors = load_json(ACTORS_FILE)
-topics = load_json(TOPICS_FILE)
-
-tasks = {}
-actor_selection = {}
-
-task_status = {}
-status_messages = {}
-private_messages = {}
-
-
-def topic_key(chat_id, thread_id):
-    return f"{chat_id}:{thread_id}"
-
+# ---------- ACTORS ----------
 
 def find_actor_by_id(user_id):
-    for nick, data in actors.items():
-        if data["id"] == user_id:
-            return nick
+
+    rows = actors_sheet.get_all_records()
+
+    for row in rows:
+        if int(row["user_id"]) == user_id:
+            return row["nick"]
+
+    return None
+
+
+def save_actor(user_id, nick, telegram):
+
+    actors_sheet.append_row([
+        user_id,
+        nick,
+        telegram
+    ])
+
+
+def get_all_actors():
+
+    rows = actors_sheet.get_all_records()
+
+    return [r["nick"] for r in rows]
+
+
+def get_actor_id_by_nick(nick):
+
+    rows = actors_sheet.get_all_records()
+
+    for r in rows:
+        if r["nick"] == nick:
+            return int(r["user_id"])
+
+    return None
+
+
+# ---------- TOPICS ----------
+
+def save_topic(chat_id, thread_id, name):
+
+    topics_sheet.append_row([
+        chat_id,
+        thread_id,
+        name
+    ])
+
+
+def get_topic(chat_id, thread_id):
+
+    rows = topics_sheet.get_all_records()
+
+    for r in rows:
+        if int(r["chat_id"]) == chat_id and int(r["thread_id"]) == thread_id:
+            return r["name"]
+
     return None
 
 
 async def get_topic_name(message):
+
     if message.reply_to_message:
         if message.reply_to_message.forum_topic_created:
             return message.reply_to_message.forum_topic_created.name
@@ -95,22 +145,28 @@ async def get_topic_name(message):
     return None
 
 
-async def ensure_topic_saved(message: types.Message):
+async def ensure_topic_saved(message):
 
     if not message.message_thread_id:
         return
 
-    key = topic_key(message.chat.id, message.message_thread_id)
-
     name = await get_topic_name(message)
 
     if name:
-        topics[key] = name
-        save_json(TOPICS_FILE, topics)
 
-    elif key not in topics:
-        topics[key] = f"Тема {message.message_thread_id}"
-        save_json(TOPICS_FILE, topics)
+        if not get_topic(message.chat.id, message.message_thread_id):
+
+            save_topic(
+                message.chat.id,
+                message.message_thread_id,
+                name
+            )
+
+
+# ---------- STATUS TABLE ----------
+
+task_status = {}
+status_messages = {}
 
 
 def build_status_text(task_id):
@@ -123,17 +179,20 @@ def build_status_text(task_id):
     return "\n".join(lines)
 
 
+# ---------- REGISTER ----------
+
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
 
-    user_id = message.from_user.id
-    nick = find_actor_by_id(user_id)
+    nick = find_actor_by_id(message.from_user.id)
 
     if nick:
+
         await message.answer(
             f"Ты уже зарегистрирован как: {nick}",
             reply_markup=user_menu
         )
+
         return
 
     await state.set_state(Register.entering_nick)
@@ -144,35 +203,32 @@ async def start(message: types.Message, state: FSMContext):
 @dp.message(Register.entering_nick)
 async def save_nick(message: types.Message, state: FSMContext):
 
-    new_nick = message.text.strip()
-    user_id = message.from_user.id
+    nick = message.text.strip()
 
-    old_nick = find_actor_by_id(user_id)
-
-    if old_nick:
-        del actors[old_nick]
-
-    actors[new_nick] = {
-        "id": user_id,
-        "telegram": message.from_user.username
-    }
-
-    save_json(ACTORS_FILE, actors)
+    save_actor(
+        message.from_user.id,
+        nick,
+        message.from_user.username
+    )
 
     await state.clear()
 
     await message.answer(
-        f"Ник сохранён: {new_nick}",
+        f"Ник сохранён: {nick}",
         reply_markup=user_menu
     )
 
+
+# ---------- PING ----------
 
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
 
-def is_subtitles(message: types.Message):
+# ---------- SUBTITLES ----------
+
+def is_subtitles(message):
 
     if not message.document:
         return False
@@ -192,21 +248,33 @@ async def subtitles_detect(message: types.Message):
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(
-                text="🎙 Назначить актёров",
-                callback_data=f"assign:{message.message_id}"
-            )]
+            [
+                InlineKeyboardButton(
+                    text="🎙 Назначить актёров",
+                    callback_data=f"assign:{message.message_id}"
+                )
+            ]
         ]
     )
 
-    await message.reply("🎬 Панель серии", reply_markup=keyboard)
+    await message.reply(
+        "🎬 Панель серии",
+        reply_markup=keyboard
+    )
+
+
+# ---------- ACTOR MENU ----------
+
+actor_selection = {}
 
 
 def build_actor_menu(message_id):
 
     buttons = []
 
-    for name in actors.keys():
+    actors = get_all_actors()
+
+    for name in actors:
 
         selected = False
 
@@ -266,6 +334,8 @@ async def toggle_actor(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
 
+# ---------- SEND TASK ----------
+
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
 
@@ -279,15 +349,9 @@ async def send_task(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     thread_id = callback.message.message_thread_id
 
-    key = topic_key(chat_id, thread_id)
-    topic = topics.get(key, "Без темы")
+    topic = get_topic(chat_id, thread_id) or "Без темы"
 
     task_id = str(message_id)
-
-    tasks[task_id] = {
-        "chat": chat_id,
-        "thread": thread_id
-    }
 
     task_status[task_id] = {}
 
@@ -304,87 +368,62 @@ async def send_task(callback: types.CallbackQuery):
 
     for actor_name in selected:
 
-        user_id = actors[actor_name]["id"]
+        user_id = get_actor_id_by_nick(actor_name)
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
                     InlineKeyboardButton(
                         text="👀 Увидел",
-                        callback_data=f"seen:{task_id}:{user_id}"
+                        callback_data=f"seen:{task_id}:{actor_name}"
                     ),
                     InlineKeyboardButton(
                         text="🎤 Записано",
-                        callback_data=f"done:{task_id}:{user_id}"
+                        callback_data=f"done:{task_id}:{actor_name}"
                     )
                 ],
                 [
                     InlineKeyboardButton(
                         text="❌ Не участвую",
-                        callback_data=f"skip:{task_id}:{user_id}"
+                        callback_data=f"skip:{task_id}:{actor_name}"
                     )
                 ]
             ]
         )
 
-        msg = await bot.send_message(
+        await bot.send_message(
             user_id,
             f"🎙 Вам пришло на озвучку\n\n📂 {topic}\n\nСтатус: ⏳ ожидание",
             reply_markup=keyboard
         )
 
-        private_messages[f"{task_id}_{user_id}"] = msg.message_id
-
     await callback.answer()
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
 
-async def update_status(callback, status, task_id, user_id):
+# ---------- UPDATE STATUS ----------
 
-    actor_name = find_actor_by_id(user_id)
+async def update_status(status, task_id, actor):
 
-    task_status[task_id][actor_name] = status
+    task_status[task_id][actor] = status
 
-    group_msg = status_messages.get(task_id)
+    msg_id = status_messages.get(task_id)
 
-    task = tasks.get(task_id)
-
-    if group_msg and task:
+    if msg_id:
 
         await bot.edit_message_text(
-            chat_id=task["chat"],
-            message_id=group_msg,
-            text=build_status_text(task_id)
-        )
-
-    private_msg = private_messages.get(f"{task_id}_{user_id}")
-
-    if private_msg:
-
-        lines = callback.message.text.split("\n")
-        new_lines = []
-
-        for line in lines:
-            if not line.startswith("Статус:"):
-                new_lines.append(line)
-
-        new_lines.append(f"Статус: {status}")
-
-        await bot.edit_message_text(
-            chat_id=user_id,
-            message_id=private_msg,
-            text="\n".join(new_lines),
-            reply_markup=callback.message.reply_markup
+            text=build_status_text(task_id),
+            chat_id=list(bot._sessions.keys())[0],
+            message_id=msg_id
         )
 
 
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
-    _, task_id, user_id = callback.data.split(":")
-    user_id = int(user_id)
+    _, task_id, actor = callback.data.split(":")
 
-    await update_status(callback, "👀", task_id, user_id)
+    await update_status("👀", task_id, actor)
 
     await callback.answer()
 
@@ -392,10 +431,9 @@ async def seen(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery):
 
-    _, task_id, user_id = callback.data.split(":")
-    user_id = int(user_id)
+    _, task_id, actor = callback.data.split(":")
 
-    await update_status(callback, "🎤", task_id, user_id)
+    await update_status("🎤", task_id, actor)
 
     await callback.answer()
 
@@ -403,35 +441,43 @@ async def done(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip(callback: types.CallbackQuery):
 
-    _, task_id, user_id = callback.data.split(":")
-    user_id = int(user_id)
+    _, task_id, actor = callback.data.split(":")
 
-    await update_status(callback, "❌", task_id, user_id)
+    await update_status("❌", task_id, actor)
 
     await callback.answer()
 
 
+# ---------- WEBHOOK ----------
+
 async def webhook_handler(request):
 
     try:
-        data = await request.json()
-        update = Update.model_validate(data)
-        await dp.feed_update(bot, update)
-    except Exception as e:
-        logging.exception(f"Webhook error: {e}")
 
-    return web.Response(text="ok")
+        data = await request.json()
+
+        update = Update.model_validate(data)
+
+        await dp.feed_update(bot, update)
+
+    except Exception as e:
+
+        logging.exception("Webhook error")
+
+    return web.Response()
 
 
 async def on_startup(app):
 
     await bot.delete_webhook(drop_pending_updates=True)
+
     await bot.set_webhook(WEBHOOK_URL)
 
 
 async def on_shutdown(app):
 
     await bot.delete_webhook()
+
     await bot.session.close()
 
 
