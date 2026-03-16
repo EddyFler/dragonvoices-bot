@@ -1,4 +1,3 @@
-
 import asyncio
 import logging
 import json
@@ -85,10 +84,10 @@ async def notify(message: types.Message):
     # название темы
     topic = "Без темы"
 
-if message.reply_to_message and message.reply_to_message.forum_topic_created:
-    topic = message.reply_to_message.forum_topic_created.name
-elif message.message_thread_id:
-    topic = f"Тема #{message.message_thread_id}"
+    if message.reply_to_message and message.reply_to_message.forum_topic_created:
+        topic = message.reply_to_message.forum_topic_created.name
+    elif message.message_thread_id:
+        topic = f"Тема #{message.message_thread_id}"
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
