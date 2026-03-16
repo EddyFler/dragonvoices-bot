@@ -6,6 +6,7 @@ from aiohttp import web
 
 from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
+from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.filters import Command
 
 from aiogram.fsm.context import FSMContext
@@ -36,6 +37,17 @@ class Register(StatesGroup):
     entering_nick = State()
 
 
+# ---------- меню пользователя ----------
+
+user_menu = ReplyKeyboardMarkup(
+    keyboard=[
+        [KeyboardButton(text="🎭 Мой ник")],
+        [KeyboardButton(text="✏ Сменить ник")]
+    ],
+    resize_keyboard=True
+)
+
+
 # ---------- JSON ----------
 
 def load_json(path):
@@ -56,6 +68,47 @@ tasks = {}
 actor_selection = {}
 
 
+# ---------- helpers ----------
+
+def topic_key(chat_id, thread_id):
+    return f"{chat_id}:{thread_id}"
+
+
+def ensure_topic_saved(message: types.Message):
+
+    if not message.message_thread_id:
+        return
+
+    key = topic_key(message.chat.id, message.message_thread_id)
+
+    if key not in topics:
+
+        name = None
+
+        if message.forum_topic_created:
+            name = message.forum_topic_created.name
+
+        if message.forum_topic_edited:
+            name = message.forum_topic_edited.name
+
+        if not name:
+            name = message.chat.title
+
+        topics[key] = name
+        save_json(TOPICS_FILE, topics)
+
+        logging.info(f"Topic saved: {key} -> {name}")
+
+
+def find_actor_by_id(user_id):
+
+    for nick, data in actors.items():
+        if data["id"] == user_id:
+            return nick
+
+    return None
+
+
 # ---------- регистрация ----------
 
 @dp.message(Command("start"))
@@ -63,8 +116,13 @@ async def start(message: types.Message, state: FSMContext):
 
     user_id = message.from_user.id
 
-    if user_id in [a["id"] for a in actors.values()]:
-        await message.answer("Ты уже зарегистрирован.")
+    nick = find_actor_by_id(user_id)
+
+    if nick:
+        await message.answer(
+            f"Ты уже зарегистрирован как: {nick}",
+            reply_markup=user_menu
+        )
         return
 
     await state.set_state(Register.entering_nick)
@@ -75,10 +133,17 @@ async def start(message: types.Message, state: FSMContext):
 @dp.message(Register.entering_nick)
 async def save_nick(message: types.Message, state: FSMContext):
 
-    nick = message.text.strip()
+    new_nick = message.text.strip()
 
-    actors[nick] = {
-        "id": message.from_user.id,
+    user_id = message.from_user.id
+
+    old_nick = find_actor_by_id(user_id)
+
+    if old_nick:
+        del actors[old_nick]
+
+    actors[new_nick] = {
+        "id": user_id,
         "telegram": message.from_user.username
     }
 
@@ -86,7 +151,39 @@ async def save_nick(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-    await message.answer(f"Ник сохранён: {nick}")
+    await message.answer(
+        f"Ник сохранён: {new_nick}",
+        reply_markup=user_menu
+    )
+
+
+# ---------- меню ----------
+
+@dp.message(F.text == "🎭 Мой ник")
+async def my_nick(message: types.Message):
+
+    user_id = message.from_user.id
+
+    nick = find_actor_by_id(user_id)
+
+    if not nick:
+        await message.answer("Ты ещё не зарегистрирован. Напиши /start")
+        return
+
+    username = message.from_user.username
+
+    await message.answer(
+        f"🎭 Твой ник: {nick}\n"
+        f"📨 Telegram: @{username}"
+    )
+
+
+@dp.message(F.text == "✏ Сменить ник")
+async def change_nick(message: types.Message, state: FSMContext):
+
+    await state.set_state(Register.entering_nick)
+
+    await message.answer("Введи новый ник.")
 
 
 # ---------- ping ----------
@@ -101,20 +198,22 @@ async def ping(message: types.Message):
 @dp.message(F.forum_topic_created)
 async def topic_created(message: types.Message):
 
-    thread = str(message.message_thread_id)
+    key = topic_key(message.chat.id, message.message_thread_id)
+
     name = message.forum_topic_created.name
 
-    topics[thread] = name
+    topics[key] = name
     save_json(TOPICS_FILE, topics)
 
 
 @dp.message(F.forum_topic_edited)
 async def topic_edited(message: types.Message):
 
-    thread = str(message.message_thread_id)
+    key = topic_key(message.chat.id, message.message_thread_id)
+
     name = message.forum_topic_edited.name
 
-    topics[thread] = name
+    topics[key] = name
     save_json(TOPICS_FILE, topics)
 
 
@@ -132,6 +231,8 @@ def is_subtitles(message: types.Message):
 
 @dp.message(F.document)
 async def subtitles_detect(message: types.Message):
+
+    ensure_topic_saved(message)
 
     if not is_subtitles(message):
         return
@@ -231,7 +332,9 @@ async def send_task(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     thread_id = callback.message.message_thread_id
 
-    topic = topics.get(str(thread_id), "Без темы")
+    key = topic_key(chat_id, thread_id)
+
+    topic = topics.get(key, "Без темы")
 
     chat_str = str(chat_id)
     chat_link_id = chat_str[4:] if chat_str.startswith("-100") else chat_str
@@ -370,8 +473,6 @@ async def on_startup(app):
 
 async def on_shutdown(app):
 
-    logging.info("Shutdown")
-
     await bot.delete_webhook()
     await bot.session.close()
 
@@ -387,8 +488,6 @@ def create_app():
 
     return app
 
-
-# ---------- запуск ----------
 
 if __name__ == "__main__":
 
