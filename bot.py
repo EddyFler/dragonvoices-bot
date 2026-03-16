@@ -39,11 +39,15 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-# Читаем credentials из Render Secret Files
-with open("/etc/secrets/credentials.json", "r") as f:
+CREDS_PATH = "/etc/secrets/credentials.json"
+
+if not os.path.exists(CREDS_PATH):
+    raise RuntimeError(f"credentials.json not found at {CREDS_PATH}")
+
+with open(CREDS_PATH, "r") as f:
     creds_dict = json.load(f)
 
-# фикс для Render
+# фикс переносов строк
 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
 creds = Credentials.from_service_account_info(
@@ -53,8 +57,9 @@ creds = Credentials.from_service_account_info(
 
 client = gspread.authorize(creds)
 
-# ОТКРЫВАЕМ ПО ID
-spreadsheet = client.open_by_key("1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0")
+spreadsheet = client.open_by_key(
+    "1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0"
+)
 
 actors_sheet = spreadsheet.worksheet("actors")
 topics_sheet = spreadsheet.worksheet("topics")
