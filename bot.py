@@ -26,7 +26,6 @@ TOPICS_FILE = "topics.json"
 logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=TOKEN)
-
 storage = MemoryStorage()
 dp = Dispatcher(storage=storage)
 
@@ -37,7 +36,7 @@ class Register(StatesGroup):
     entering_nick = State()
 
 
-# ---------- пользовательское меню ----------
+# ---------- меню пользователя ----------
 
 user_menu = ReplyKeyboardMarkup(
     keyboard=[
@@ -97,8 +96,6 @@ def ensure_topic_saved(message: types.Message):
         topics[key] = name
         save_json(TOPICS_FILE, topics)
 
-        logging.info(f"Topic saved: {key} -> {name}")
-
 
 def find_actor_by_id(user_id):
 
@@ -115,7 +112,6 @@ def find_actor_by_id(user_id):
 async def start(message: types.Message, state: FSMContext):
 
     user_id = message.from_user.id
-
     nick = find_actor_by_id(user_id)
 
     if nick:
@@ -134,7 +130,6 @@ async def start(message: types.Message, state: FSMContext):
 async def save_nick(message: types.Message, state: FSMContext):
 
     new_nick = message.text.strip()
-
     user_id = message.from_user.id
 
     old_nick = find_actor_by_id(user_id)
@@ -163,7 +158,6 @@ async def save_nick(message: types.Message, state: FSMContext):
 async def my_nick(message: types.Message):
 
     user_id = message.from_user.id
-
     nick = find_actor_by_id(user_id)
 
     if not nick:
@@ -200,9 +194,7 @@ async def topic_created(message: types.Message):
 
     key = topic_key(message.chat.id, message.message_thread_id)
 
-    name = message.forum_topic_created.name
-
-    topics[key] = name
+    topics[key] = message.forum_topic_created.name
     save_json(TOPICS_FILE, topics)
 
 
@@ -211,9 +203,7 @@ async def topic_edited(message: types.Message):
 
     key = topic_key(message.chat.id, message.message_thread_id)
 
-    name = message.forum_topic_edited.name
-
-    topics[key] = name
+    topics[key] = message.forum_topic_edited.name
     save_json(TOPICS_FILE, topics)
 
 
@@ -317,152 +307,35 @@ async def toggle_actor(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
 
-# ---------- отправка задания ----------
-
-@dp.callback_query(F.data.startswith("send:"))
-async def send_task(callback: types.CallbackQuery):
-
-    message_id = int(callback.data.split(":")[1])
-    selected = actor_selection.get(message_id, [])
-
-    if not selected:
-        await callback.answer("Выберите актёров.")
-        return
-
-    chat_id = callback.message.chat.id
-    thread_id = callback.message.message_thread_id
-
-    key = topic_key(chat_id, thread_id)
-
-    topic = topics.get(key, "Без темы")
-
-    chat_str = str(chat_id)
-    chat_link_id = chat_str[4:] if chat_str.startswith("-100") else chat_str
-
-    message_link = f"https://t.me/c/{chat_link_id}/{message_id}"
-
-    for actor_name in selected:
-
-        user_id = actors[actor_name]["id"]
-
-        task_id = f"{message_id}_{user_id}"
-
-        tasks[task_id] = {
-            "chat": chat_id,
-            "thread": thread_id,
-            "topic": topic,
-            "link": message_link,
-            "original": message_id
-        }
-
-        keyboard = InlineKeyboardMarkup(
-            inline_keyboard=[
-                [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
-                [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}"),
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}")
-                ],
-                [
-                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}")
-                ]
-            ]
-        )
-
-        await bot.copy_message(
-            chat_id=user_id,
-            from_chat_id=chat_id,
-            message_id=message_id
-        )
-
-        await bot.send_message(
-            user_id,
-            f"🎙 Вам пришло на озвучку\n\n📂 {topic}\n\nСтатус: ⏳ ожидание",
-            reply_markup=keyboard
-        )
-
-    await callback.message.edit_text("✅ Задание отправлено актёрам.")
-
-
-# ---------- статусы ----------
-
-async def update_status(callback, status, task_id, stop_timer=False):
-
-    keyboard = callback.message.reply_markup
-
-    lines = callback.message.text.split("\n")
-    new_lines = []
-
-    for line in lines:
-        if not line.startswith("Статус:"):
-            new_lines.append(line)
-
-    new_lines.append(f"Статус: {status}")
-
-    await callback.message.edit_text("\n".join(new_lines), reply_markup=keyboard)
-
-    task = tasks.get(task_id)
-
-    if task:
-
-        user = callback.from_user.username or callback.from_user.first_name
-
-        await bot.send_message(
-            chat_id=task["chat"],
-            message_thread_id=task["thread"],
-            reply_to_message_id=task["original"],
-            text=f"{status} @{user}\n📂 {task['topic']}\n🔗 {task['link']}"
-        )
-
-        if stop_timer:
-            del tasks[task_id]
-
-
-@dp.callback_query(F.data.startswith("seen:"))
-async def seen(callback: types.CallbackQuery):
-
-    task_id = callback.data.split(":")[1]
-
-    await update_status(callback, "👀 Увидел", task_id, False)
-
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("done:"))
-async def done(callback: types.CallbackQuery):
-
-    task_id = callback.data.split(":")[1]
-
-    await update_status(callback, "🎤 Записано", task_id, True)
-
-    await callback.answer()
-
-
-@dp.callback_query(F.data.startswith("skip:"))
-async def skip(callback: types.CallbackQuery):
-
-    task_id = callback.data.split(":")[1]
-
-    await update_status(callback, "❌ Не участвует", task_id, True)
-
-    await callback.answer()
-
-
 # ---------- webhook ----------
 
 async def webhook_handler(request):
 
     try:
-
         data = await request.json()
-
         update = Update.model_validate(data)
-
         await dp.feed_update(bot, update)
-
     except Exception as e:
         logging.exception(f"Webhook error: {e}")
 
     return web.Response(text="ok")
+
+
+async def on_startup(app):
+
+    logging.info("Setting webhook")
+
+    await bot.delete_webhook(drop_pending_updates=True)
+
+    await bot.set_webhook(WEBHOOK_URL)
+
+    logging.info("Webhook installed")
+
+
+async def on_shutdown(app):
+
+    await bot.delete_webhook()
+    await bot.session.close()
 
 
 def create_app():
@@ -471,6 +344,9 @@ def create_app():
 
     app.router.add_post(WEBHOOK_PATH, webhook_handler)
 
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
     return app
 
 
@@ -478,20 +354,8 @@ def create_app():
 
 if __name__ == "__main__":
 
-    async def main():
+    port = int(os.environ.get("PORT", 10000))
 
-        logging.info("Installing webhook")
+    logging.info(f"Starting server on port {port}")
 
-        await bot.delete_webhook(drop_pending_updates=True)
-
-        await bot.set_webhook(WEBHOOK_URL)
-
-        logging.info("Webhook installed")
-
-        app = create_app()
-
-        port = int(os.environ.get("PORT", 10000))
-
-        web.run_app(app, host="0.0.0.0", port=port)
-
-    asyncio.run(main())
+    web.run_app(create_app(), host="0.0.0.0", port=port)
