@@ -45,9 +45,11 @@ if not os.path.exists(CREDS_PATH):
     raise RuntimeError(f"credentials.json not found at {CREDS_PATH}")
 
 with open(CREDS_PATH, "r") as f:
-    creds_dict = json.load(f)
+    creds_raw = f.read()
 
-# фикс переносов строк
+creds_dict = json.loads(creds_raw)
+
+# фикс переносов строк для Render
 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
 creds = Credentials.from_service_account_info(
