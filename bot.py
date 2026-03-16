@@ -39,7 +39,9 @@ scope = [
     "https://www.googleapis.com/auth/drive"
 ]
 
-with open("credentials.json", "r") as f:
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+with open(os.path.join(BASE_DIR, "credentials.json"), "r") as f:
     creds_dict = json.load(f)
 
 # фикс для Render
