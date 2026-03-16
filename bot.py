@@ -8,6 +8,10 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiogram.filters import Command
 
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
+
 TOKEN = "8618936533:AAGPKLwykJl4RWzTukDB4mXUd12bGaPZPFk"
 
 BASE_URL = "https://dragonvoices-bot.onrender.com"
@@ -17,12 +21,21 @@ WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
 ACTORS_FILE = "actors.json"
 TOPICS_FILE = "topics.json"
 
-bot = Bot(token=TOKEN)
-dp = Dispatcher()
-
 logging.basicConfig(level=logging.INFO)
 
-# ---------------- JSON ----------------
+bot = Bot(token=TOKEN)
+
+storage = MemoryStorage()
+dp = Dispatcher(storage=storage)
+
+
+# ---------- FSM ----------
+
+class Register(StatesGroup):
+    entering_nick = State()
+
+
+# ---------- JSON ----------
 
 def load_json(path):
     if os.path.exists(path):
@@ -34,17 +47,18 @@ def save_json(path, data):
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
+
 actors = load_json(ACTORS_FILE)
 topics = load_json(TOPICS_FILE)
 
 tasks = {}
-waiting_for_nick = {}
 actor_selection = {}
 
-# ---------------- регистрация ----------------
+
+# ---------- регистрация ----------
 
 @dp.message(Command("start"))
-async def start(message: types.Message):
+async def start(message: types.Message, state: FSMContext):
 
     user_id = message.from_user.id
 
@@ -52,37 +66,36 @@ async def start(message: types.Message):
         await message.answer("Ты уже зарегистрирован.")
         return
 
-    waiting_for_nick[user_id] = True
+    await state.set_state(Register.entering_nick)
+
     await message.answer("Введи свой ник актёра.")
 
-@dp.message()
-async def save_nick(message: types.Message):
 
-    user_id = message.from_user.id
-
-    if user_id not in waiting_for_nick:
-        return
+@dp.message(Register.entering_nick)
+async def save_nick(message: types.Message, state: FSMContext):
 
     nick = message.text.strip()
 
     actors[nick] = {
-        "id": user_id,
+        "id": message.from_user.id,
         "telegram": message.from_user.username
     }
 
     save_json(ACTORS_FILE, actors)
 
-    waiting_for_nick.pop(user_id)
+    await state.clear()
 
     await message.answer(f"Ник сохранён: {nick}")
 
-# ---------------- ping ----------------
+
+# ---------- ping ----------
 
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
-# ---------------- темы ----------------
+
+# ---------- темы ----------
 
 @dp.message(F.forum_topic_created)
 async def topic_created(message: types.Message):
@@ -93,6 +106,7 @@ async def topic_created(message: types.Message):
     topics[thread] = name
     save_json(TOPICS_FILE, topics)
 
+
 @dp.message(F.forum_topic_edited)
 async def topic_edited(message: types.Message):
 
@@ -102,7 +116,8 @@ async def topic_edited(message: types.Message):
     topics[thread] = name
     save_json(TOPICS_FILE, topics)
 
-# ---------------- субтитры ----------------
+
+# ---------- субтитры ----------
 
 def is_subtitles(message: types.Message):
 
@@ -110,7 +125,9 @@ def is_subtitles(message: types.Message):
         return False
 
     name = message.document.file_name.lower()
+
     return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
+
 
 @dp.message(F.document)
 async def subtitles_detect(message: types.Message):
@@ -129,7 +146,8 @@ async def subtitles_detect(message: types.Message):
 
     await message.reply("🎬 Панель серии", reply_markup=keyboard)
 
-# ---------------- меню актёров ----------------
+
+# ---------- меню актёров ----------
 
 def build_actor_menu(message_id):
 
@@ -160,6 +178,7 @@ def build_actor_menu(message_id):
 
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
+
 @dp.callback_query(F.data.startswith("assign:"))
 async def open_actor_menu(callback: types.CallbackQuery):
 
@@ -174,7 +193,8 @@ async def open_actor_menu(callback: types.CallbackQuery):
         reply_markup=keyboard
     )
 
-# ---------------- переключение ----------------
+
+# ---------- переключение ----------
 
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_actor(callback: types.CallbackQuery):
@@ -194,7 +214,8 @@ async def toggle_actor(callback: types.CallbackQuery):
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
-# ---------------- отправка задания ----------------
+
+# ---------- отправка задания ----------
 
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
@@ -257,7 +278,8 @@ async def send_task(callback: types.CallbackQuery):
 
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
-# ---------------- статусы ----------------
+
+# ---------- статусы ----------
 
 async def update_status(callback, status, task_id, stop_timer=False):
 
@@ -290,49 +312,67 @@ async def update_status(callback, status, task_id, stop_timer=False):
         if stop_timer:
             del tasks[task_id]
 
+
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
+
     await update_status(callback, "👀 Увидел", task_id, False)
+
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
+
     await update_status(callback, "🎤 Записано", task_id, True)
+
     await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
+
     await update_status(callback, "❌ Не участвует", task_id, True)
+
     await callback.answer()
 
-# ---------------- webhook сервер ----------------
+
+# ---------- webhook ----------
 
 async def webhook_handler(request):
 
     try:
         data = await request.json()
+
         update = Update.model_validate(data)
+
         await dp.feed_update(bot, update)
-    except Exception as e:
-        logging.exception(e)
+
+    except Exception:
+        logging.exception("Webhook error")
 
     return web.Response()
 
+
 async def on_startup(app):
 
-    logging.info("Setting webhook...")
+    logging.info("Reset webhook")
+
+    await bot.delete_webhook(drop_pending_updates=True)
+
     await bot.set_webhook(WEBHOOK_URL)
+
 
 async def on_shutdown(app):
 
-    logging.info("Deleting webhook...")
     await bot.delete_webhook()
+
 
 def create_app():
 
@@ -345,7 +385,8 @@ def create_app():
 
     return app
 
-# ---------------- запуск ----------------
+
+# ---------- запуск ----------
 
 if __name__ == "__main__":
 
