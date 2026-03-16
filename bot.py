@@ -176,7 +176,6 @@ async def my_nick(message: types.Message):
 async def change_nick(message: types.Message, state: FSMContext):
 
     await state.set_state(Register.entering_nick)
-
     await message.answer("Введи новый ник.")
 
 
@@ -193,7 +192,6 @@ async def ping(message: types.Message):
 async def topic_created(message: types.Message):
 
     key = topic_key(message.chat.id, message.message_thread_id)
-
     topics[key] = message.forum_topic_created.name
     save_json(TOPICS_FILE, topics)
 
@@ -202,7 +200,6 @@ async def topic_created(message: types.Message):
 async def topic_edited(message: types.Message):
 
     key = topic_key(message.chat.id, message.message_thread_id)
-
     topics[key] = message.forum_topic_edited.name
     save_json(TOPICS_FILE, topics)
 
@@ -307,6 +304,79 @@ async def toggle_actor(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
 
+# ---------- отправка задания ----------
+
+@dp.callback_query(F.data.startswith("send:"))
+async def send_task(callback: types.CallbackQuery):
+
+    message_id = int(callback.data.split(":")[1])
+    selected = actor_selection.get(message_id, [])
+
+    if not selected:
+        await callback.answer("Выберите актёров.")
+        return
+
+    chat_id = callback.message.chat.id
+    thread_id = callback.message.message_thread_id
+
+    key = topic_key(chat_id, thread_id)
+    topic = topics.get(key, "Без темы")
+
+    chat_str = str(chat_id)
+    chat_link_id = chat_str[4:] if chat_str.startswith("-100") else chat_str
+
+    message_link = f"https://t.me/c/{chat_link_id}/{message_id}"
+
+    for actor_name in selected:
+
+        user_id = actors[actor_name]["id"]
+
+        task_id = f"{message_id}_{user_id}"
+
+        tasks[task_id] = {
+            "chat": chat_id,
+            "thread": thread_id,
+            "topic": topic,
+            "link": message_link,
+            "original": message_id
+        }
+
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
+                [
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}")
+                ],
+                [
+                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}")
+                ]
+            ]
+        )
+
+        try:
+
+            await bot.copy_message(
+                chat_id=user_id,
+                from_chat_id=chat_id,
+                message_id=message_id
+            )
+
+            await bot.send_message(
+                user_id,
+                f"🎙 Вам пришло на озвучку\n\n📂 {topic}\n\nСтатус: ⏳ ожидание",
+                reply_markup=keyboard
+            )
+
+        except Exception as e:
+
+            logging.error(f"Cannot send task to {actor_name}: {e}")
+
+    await callback.answer()
+
+    await callback.message.edit_text("✅ Задание отправлено актёрам.")
+
+
 # ---------- webhook ----------
 
 async def webhook_handler(request):
@@ -326,7 +396,6 @@ async def on_startup(app):
     logging.info("Setting webhook")
 
     await bot.delete_webhook(drop_pending_updates=True)
-
     await bot.set_webhook(WEBHOOK_URL)
 
     logging.info("Webhook installed")
