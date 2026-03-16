@@ -12,6 +12,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
+
 TOKEN = "8618936533:AAGPKLwykJl4RWzTukDB4mXUd12bGaPZPFk"
 
 BASE_URL = "https://dragonvoices-bot.onrender.com"
@@ -347,17 +348,13 @@ async def skip(callback: types.CallbackQuery):
 
 async def webhook_handler(request):
 
-    try:
-        data = await request.json()
+    data = await request.json()
 
-        update = Update.model_validate(data)
+    update = Update.model_validate(data)
 
-        await dp.feed_update(bot, update)
+    await dp.feed_update(bot, update)
 
-    except Exception:
-        logging.exception("Webhook error")
-
-    return web.Response()
+    return web.Response(text="ok")
 
 
 async def on_startup(app):
@@ -368,10 +365,15 @@ async def on_startup(app):
 
     await bot.set_webhook(WEBHOOK_URL)
 
+    logging.info("Webhook set")
+
 
 async def on_shutdown(app):
 
+    logging.info("Shutdown")
+
     await bot.delete_webhook()
+    await bot.session.close()
 
 
 def create_app():
