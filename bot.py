@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-TOKEN = "8618936533:AAGPKLwykJl4RWzTukDB4mXUd12bGaPZPFk"
+TOKEN = os.getenv("BOT_TOKEN") or "PUT_YOUR_TOKEN_HERE"
 USERS_FILE = "users.json"
 
 bot = Bot(token=TOKEN)
@@ -27,29 +27,31 @@ def save_users():
 
 users = load_users()
 
-# ---------- регистрация ----------
+def register_user(user: types.User):
+    """Сохраняем пользователя, если у него есть username"""
+    if user and user.username:
+        users[user.username] = user.id
+        save_users()
+
+# ---------- авто-регистрация в любом сообщении ----------
+
+@dp.message()
+async def auto_register(message: types.Message):
+    register_user(message.from_user)
+
+# ---------- регистрация через /start ----------
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
-
-    if message.from_user.username:
-        users[message.from_user.username] = message.from_user.id
-        save_users()
-
+    register_user(message.from_user)
     await message.answer("Ты подключен к системе озвучки.")
 
 # ---------- напоминание ----------
 
 async def reminder(user_id, text, keyboard, delay):
-
     await asyncio.sleep(delay)
-
     try:
-        await bot.send_message(
-            user_id,
-            text,
-            reply_markup=keyboard
-        )
+        await bot.send_message(user_id, text, reply_markup=keyboard)
     except:
         pass
 
@@ -57,6 +59,8 @@ async def reminder(user_id, text, keyboard, delay):
 
 @dp.message(Command("notify"))
 async def notify(message: types.Message):
+
+    register_user(message.from_user)
 
     if not message.reply_to_message:
         await message.reply("Ответь /notify на сообщение с субтитрами.")
@@ -71,7 +75,7 @@ async def notify(message: types.Message):
 
     original = message.reply_to_message
 
-    # ссылка на сообщение
+    # ---------- ссылка на сообщение ----------
     chat_id = str(message.chat.id)
 
     if chat_id.startswith("-100"):
@@ -81,13 +85,18 @@ async def notify(message: types.Message):
 
     message_link = f"https://t.me/c/{chat_link_id}/{original.message_id}"
 
-    # название темы
+    # ---------- получение названия темы ----------
     topic = "Без темы"
 
-    if message.reply_to_message and message.reply_to_message.forum_topic_created:
-        topic = message.reply_to_message.forum_topic_created.name
-    elif message.message_thread_id:
-        topic = f"Тема #{message.message_thread_id}"
+    if message.message_thread_id:
+        try:
+            topic_info = await bot.get_forum_topic(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id
+            )
+            topic = topic_info.name
+        except:
+            topic = f"Тема #{message.message_thread_id}"
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
@@ -95,6 +104,8 @@ async def notify(message: types.Message):
             [InlineKeyboardButton(text="✅ Озвучено", callback_data="done")]
         ]
     )
+
+    sent = 0
 
     for username in usernames:
 
@@ -135,12 +146,14 @@ async def notify(message: types.Message):
                 )
             )
 
-            await asyncio.sleep(0.5)
+            sent += 1
+
+            await asyncio.sleep(0.4)
 
         except Exception as e:
-            print(e)
+            print("Ошибка отправки:", e)
 
-    await message.reply("Задание отправлено актёрам.")
+    await message.reply(f"Задание отправлено актёрам ({sent}).")
 
 # ---------- кнопка DONE ----------
 
