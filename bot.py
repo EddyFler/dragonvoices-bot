@@ -41,15 +41,9 @@ scope = [
 
 CREDS_PATH = "/etc/secrets/credentials.json"
 
-if not os.path.exists(CREDS_PATH):
-    raise RuntimeError(f"credentials.json not found at {CREDS_PATH}")
-
 with open(CREDS_PATH, "r") as f:
-    creds_raw = f.read()
+    creds_dict = json.load(f)
 
-creds_dict = json.loads(creds_raw)
-
-# фикс переносов строк для Render
 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
 
 creds = Credentials.from_service_account_info(
@@ -66,6 +60,12 @@ spreadsheet = client.open_by_key(
 actors_sheet = spreadsheet.worksheet("actors")
 topics_sheet = spreadsheet.worksheet("topics")
 tasks_sheet = spreadsheet.worksheet("tasks")
+
+
+# ---------- STORAGE ----------
+
+tasks = {}
+actor_selection = {}
 
 
 # ---------- FSM ----------
@@ -178,23 +178,6 @@ async def ensure_topic_saved(message):
             )
 
 
-# ---------- STATUS TABLE ----------
-
-task_status = {}
-status_messages = {}
-task_meta = {}
-
-
-def build_status_text(task_id):
-
-    lines = ["📊 Статусы актёров\n"]
-
-    for actor, status in task_status[task_id].items():
-        lines.append(f"{actor} — {status}")
-
-    return "\n".join(lines)
-
-
 # ---------- REGISTER ----------
 
 @dp.message(Command("start"))
@@ -281,9 +264,6 @@ async def subtitles_detect(message: types.Message):
 
 # ---------- ACTOR MENU ----------
 
-actor_selection = {}
-
-
 def build_actor_menu(message_id):
 
     buttons = []
@@ -367,46 +347,42 @@ async def send_task(callback: types.CallbackQuery):
 
     topic = get_topic(chat_id, thread_id) or "Без темы"
 
-    task_id = f"{chat_id}_{message_id}"
+    chat_str = str(chat_id)
+    chat_link_id = chat_str[4:] if chat_str.startswith("-100") else chat_str
 
-    task_meta[task_id] = (chat_id, thread_id)
-
-    task_status[task_id] = {}
-
-    for actor in selected:
-        task_status[task_id][actor] = "⏳"
-
-    status_msg = await bot.send_message(
-        chat_id=chat_id,
-        message_thread_id=thread_id,
-        text=build_status_text(task_id)
-    )
-
-    status_messages[task_id] = status_msg.message_id
+    message_link = f"https://t.me/c/{chat_link_id}/{message_id}"
 
     for actor_name in selected:
 
         user_id = get_actor_id_by_nick(actor_name)
 
+        task_id = f"{message_id}_{user_id}"
+
+        tasks[task_id] = {
+            "chat": chat_id,
+            "thread": thread_id,
+            "topic": topic,
+            "link": message_link,
+            "original": message_id
+        }
+
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
                 [
-                    InlineKeyboardButton(
-                        text="👀 Увидел",
-                        callback_data=f"seen:{task_id}:{actor_name}"
-                    ),
-                    InlineKeyboardButton(
-                        text="🎤 Записано",
-                        callback_data=f"done:{task_id}:{actor_name}"
-                    )
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}")
                 ],
                 [
-                    InlineKeyboardButton(
-                        text="❌ Не участвую",
-                        callback_data=f"skip:{task_id}:{actor_name}"
-                    )
+                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}")
                 ]
             ]
+        )
+
+        await bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=chat_id,
+            message_id=message_id
         )
 
         await bot.send_message(
@@ -415,35 +391,46 @@ async def send_task(callback: types.CallbackQuery):
             reply_markup=keyboard
         )
 
-    await callback.answer()
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
 
-# ---------- UPDATE STATUS ----------
+# ---------- STATUS ----------
 
-async def update_status(status, task_id, actor):
+async def update_status(callback, status, task_id):
 
-    task_status[task_id][actor] = status
+    keyboard = callback.message.reply_markup
 
-    msg_id = status_messages.get(task_id)
+    lines = callback.message.text.split("\n")
+    new_lines = []
 
-    chat_id, thread_id = task_meta[task_id]
+    for line in lines:
+        if not line.startswith("Статус:"):
+            new_lines.append(line)
 
-    if msg_id:
+    new_lines.append(f"Статус: {status}")
 
-        await bot.edit_message_text(
-            text=build_status_text(task_id),
-            chat_id=chat_id,
-            message_id=msg_id
+    await callback.message.edit_text("\n".join(new_lines), reply_markup=keyboard)
+
+    task = tasks.get(task_id)
+
+    if task:
+
+        user = callback.from_user.username or callback.from_user.first_name
+
+        await bot.send_message(
+            chat_id=task["chat"],
+            message_thread_id=task["thread"],
+            reply_to_message_id=task["original"],
+            text=f"{status} @{user}\n📂 {task['topic']}\n🔗 {task['link']}"
         )
 
 
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
-    _, task_id, actor = callback.data.split(":")
+    task_id = callback.data.split(":")[1]
 
-    await update_status("👀", task_id, actor)
+    await update_status(callback, "👀 Увидел", task_id)
 
     await callback.answer()
 
@@ -451,9 +438,9 @@ async def seen(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery):
 
-    _, task_id, actor = callback.data.split(":")
+    task_id = callback.data.split(":")[1]
 
-    await update_status("🎤", task_id, actor)
+    await update_status(callback, "🎤 Записано", task_id)
 
     await callback.answer()
 
@@ -461,9 +448,9 @@ async def done(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip(callback: types.CallbackQuery):
 
-    _, task_id, actor = callback.data.split(":")
+    task_id = callback.data.split(":")[1]
 
-    await update_status("❌", task_id, actor)
+    await update_status(callback, "❌ Не участвует", task_id)
 
     await callback.answer()
 
