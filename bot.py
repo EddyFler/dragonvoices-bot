@@ -13,12 +13,10 @@ USERS_FILE = "users.json"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------- базы ----------
-
 users = {}
 tasks = {}
 
-# ---------- загрузка пользователей ----------
+# ---------- users ----------
 
 def load_users():
     if os.path.exists(USERS_FILE):
@@ -33,30 +31,30 @@ def save_users():
 users = load_users()
 
 def register_user(user: types.User):
-    if user and user.username:
+    if user.username:
         users[user.username] = user.id
         save_users()
 
-# ---------- авто регистрация (но НЕ для команд) ----------
+# ---------- авто регистрация ----------
 
 @dp.message(~F.text.startswith("/"))
 async def auto_register(message: types.Message):
     register_user(message.from_user)
 
-# ---------- /start ----------
+# ---------- start ----------
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     register_user(message.from_user)
     await message.answer("Ты подключен к системе озвучки.")
 
-# ---------- /ping ----------
+# ---------- ping ----------
 
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
-# ---------- напоминание ----------
+# ---------- reminder ----------
 
 async def reminder(user_id, text, keyboard, delay, task_id):
 
@@ -66,11 +64,7 @@ async def reminder(user_id, text, keyboard, delay, task_id):
         return
 
     try:
-        await bot.send_message(
-            user_id,
-            text,
-            reply_markup=keyboard
-        )
+        await bot.send_message(user_id, text, reply_markup=keyboard)
     except:
         pass
 
@@ -94,19 +88,13 @@ async def notify(message: types.Message):
 
     original = message.reply_to_message
 
-    chat_id = str(message.chat.id)
-
-    if chat_id.startswith("-100"):
-        chat_link_id = chat_id[4:]
-    else:
-        chat_link_id = chat_id
-
-    message_link = f"https://t.me/c/{chat_link_id}/{original.message_id}"
+    chat_id = message.chat.id
+    thread_id = message.message_thread_id
 
     topic = "Без темы"
 
-    if message.message_thread_id:
-        topic = f"Тема #{message.message_thread_id}"
+    if thread_id:
+        topic = f"Тема #{thread_id}"
 
     sent = 0
 
@@ -118,13 +106,19 @@ async def notify(message: types.Message):
         user_id = users[username]
 
         task_id = f"{original.message_id}_{user_id}"
-        tasks[task_id] = True
+
+        tasks[task_id] = {
+            "chat": chat_id,
+            "topic": topic,
+            "username": username
+        }
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="📂 Открыть субтитры", url=message_link)],
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}"),
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}")
+                ],
+                [
                     InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}")
                 ],
                 [
@@ -172,7 +166,7 @@ async def notify(message: types.Message):
             await asyncio.sleep(0.4)
 
         except Exception as e:
-            print("Ошибка отправки:", e)
+            print(e)
 
     await message.reply(f"Задание отправлено актёрам ({sent}).")
 
@@ -181,42 +175,65 @@ async def notify(message: types.Message):
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
+    task_id = callback.data.split(":")[1]
+
+    keyboard = callback.message.reply_markup
+
     await callback.message.edit_text(
-        callback.message.text + "\n\n👀 Увидел"
+        callback.message.text + "\n\n👀 Увидел",
+        reply_markup=keyboard
     )
 
     await callback.answer("Отмечено")
-
 
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    if task_id in tasks:
+    keyboard = callback.message.reply_markup
+
+    user = callback.from_user.username
+
+    task = tasks.get(task_id)
+
+    if task:
+        await bot.send_message(
+            task["chat"],
+            f"🎤 @{user} записал роль\n📂 {task['topic']}"
+        )
+
         del tasks[task_id]
 
-    user = callback.from_user.username or callback.from_user.full_name
-
     await callback.message.edit_text(
-        callback.message.text + f"\n\n🎤 Записано: @{user}"
+        callback.message.text + f"\n\n🎤 Записано: @{user}",
+        reply_markup=keyboard
     )
 
     await callback.answer("Отмечено")
-
 
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    if task_id in tasks:
+    keyboard = callback.message.reply_markup
+
+    user = callback.from_user.username
+
+    task = tasks.get(task_id)
+
+    if task:
+        await bot.send_message(
+            task["chat"],
+            f"❌ @{user} не участвует\n📂 {task['topic']}"
+        )
+
         del tasks[task_id]
 
-    user = callback.from_user.username or callback.from_user.full_name
-
     await callback.message.edit_text(
-        callback.message.text + f"\n\n❌ Не участвует: @{user}"
+        callback.message.text + f"\n\n❌ Не участвует: @{user}",
+        reply_markup=keyboard
     )
 
     await callback.answer("Отмечено")
@@ -224,7 +241,11 @@ async def skip(callback: types.CallbackQuery):
 # ---------- запуск ----------
 
 async def main():
+
     logging.basicConfig(level=logging.INFO)
+
+    await bot.delete_webhook(drop_pending_updates=True)
+
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
