@@ -16,47 +16,56 @@ dp = Dispatcher()
 users = {}
 tasks = {}
 
-# ---------- users ----------
-
 def load_users():
     if os.path.exists(USERS_FILE):
-        with open(USERS_FILE, "r", encoding="utf-8") as f:
+        with open(USERS_FILE,"r",encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 def save_users():
-    with open(USERS_FILE, "w", encoding="utf-8") as f:
-        json.dump(users, f)
+    with open(USERS_FILE,"w",encoding="utf-8") as f:
+        json.dump(users,f)
 
 users = load_users()
 
-def register_user(user: types.User):
+def register_user(user):
     if user.username:
         users[user.username] = user.id
         save_users()
 
-# ---------- авто регистрация ----------
-
+# авто регистрация
 @dp.message(~F.text.startswith("/"))
 async def auto_register(message: types.Message):
     register_user(message.from_user)
-
-# ---------- start ----------
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
     register_user(message.from_user)
     await message.answer("Ты подключен к системе озвучки.")
 
-# ---------- ping ----------
-
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
-# ---------- reminder ----------
+# получение названия темы
+async def get_topic_name(message: types.Message):
 
-async def reminder(user_id, text, keyboard, delay, task_id):
+    if message.reply_to_message and message.reply_to_message.forum_topic_created:
+        return message.reply_to_message.forum_topic_created.name
+
+    if message.message_thread_id:
+        try:
+            topic = await bot.get_forum_topic(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id
+            )
+            return topic.name
+        except:
+            pass
+
+    return "Без темы"
+
+async def reminder(user_id,text,keyboard,delay,task_id):
 
     await asyncio.sleep(delay)
 
@@ -64,11 +73,9 @@ async def reminder(user_id, text, keyboard, delay, task_id):
         return
 
     try:
-        await bot.send_message(user_id, text, reply_markup=keyboard)
+        await bot.send_message(user_id,text,reply_markup=keyboard)
     except:
         pass
-
-# ---------- notify ----------
 
 @dp.message(Command("notify"))
 async def notify(message: types.Message):
@@ -79,22 +86,26 @@ async def notify(message: types.Message):
         await message.reply("Ответь /notify на сообщение с субтитрами.")
         return
 
+    topic = await get_topic_name(message)
+
+    original = message.reply_to_message
+
+    chat_id = str(message.chat.id)
+
+    if chat_id.startswith("-100"):
+        chat_link_id = chat_id[4:]
+    else:
+        chat_link_id = chat_id
+
+    message_link = f"https://t.me/c/{chat_link_id}/{original.message_id}"
+
     args = message.text.split()
+
     usernames = []
 
     for arg in args[1:]:
         if arg.startswith("@"):
-            usernames.append(arg.replace("@", ""))
-
-    original = message.reply_to_message
-
-    chat_id = message.chat.id
-    thread_id = message.message_thread_id
-
-    topic = "Без темы"
-
-    if thread_id:
-        topic = f"Тема #{thread_id}"
+            usernames.append(arg.replace("@",""))
 
     sent = 0
 
@@ -108,137 +119,123 @@ async def notify(message: types.Message):
         task_id = f"{original.message_id}_{user_id}"
 
         tasks[task_id] = {
-            "chat": chat_id,
-            "topic": topic,
-            "username": username
+            "chat":message.chat.id,
+            "topic":topic,
+            "link":message_link
         }
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Открыть сообщение",url=message_link)],
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}")
+                    InlineKeyboardButton(text="👀 Увидел",callback_data=f"seen:{task_id}"),
+                    InlineKeyboardButton(text="🎤 Записано",callback_data=f"done:{task_id}")
                 ],
                 [
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}")
-                ],
-                [
-                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}")
+                    InlineKeyboardButton(text="❌ Не участвую",callback_data=f"skip:{task_id}")
                 ]
             ]
         )
 
-        try:
+        await bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=original.chat.id,
+            message_id=original.message_id
+        )
 
-            await bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=original.chat.id,
-                message_id=original.message_id
-            )
+        await bot.send_message(
+            user_id,
+            f"🎙 Вам пришло на озвучку\n\n📂 {topic}\n\nСтатус: ⏳ Ожидание",
+            reply_markup=keyboard
+        )
 
-            await bot.send_message(
+        asyncio.create_task(
+            reminder(
                 user_id,
-                f"🎙 Вам пришло на озвучку\n\n📂 Тема: {topic}",
-                reply_markup=keyboard
+                "⏰ Напоминание: у вас есть субтитры",
+                keyboard,
+                10800,
+                task_id
             )
+        )
 
-            asyncio.create_task(
-                reminder(
-                    user_id,
-                    "⏰ Напоминание: у вас есть субтитры на озвучку",
-                    keyboard,
-                    10800,
-                    task_id
-                )
+        asyncio.create_task(
+            reminder(
+                user_id,
+                "⏰ Последнее напоминание",
+                keyboard,
+                18000,
+                task_id
             )
+        )
 
-            asyncio.create_task(
-                reminder(
-                    user_id,
-                    "⏰ Последнее напоминание: проверьте субтитры",
-                    keyboard,
-                    18000,
-                    task_id
-                )
-            )
+        sent += 1
 
-            sent += 1
+        await asyncio.sleep(0.3)
 
-            await asyncio.sleep(0.4)
+    await message.reply(f"Задание отправлено актёрам ({sent})")
 
-        except Exception as e:
-            print(e)
+async def update_status(callback,status,task_id,stop_timer=False):
 
-    await message.reply(f"Задание отправлено актёрам ({sent}).")
+    keyboard = callback.message.reply_markup
 
-# ---------- кнопки ----------
+    lines = callback.message.text.split("\n")
+
+    new_lines = []
+
+    for line in lines:
+        if not line.startswith("Статус:"):
+            new_lines.append(line)
+
+    new_lines.append(f"Статус: {status}")
+
+    new_text = "\n".join(new_lines)
+
+    await callback.message.edit_text(
+        new_text,
+        reply_markup=keyboard
+    )
+
+    task = tasks.get(task_id)
+
+    if task:
+
+        user = callback.from_user.username
+
+        await bot.send_message(
+            task["chat"],
+            f"{status} @{user}\n📂 {task['topic']}\n{task['link']}"
+        )
+
+        if stop_timer:
+            del tasks[task_id]
 
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    keyboard = callback.message.reply_markup
+    await update_status(callback,"👀 Увидел",task_id,False)
 
-    await callback.message.edit_text(
-        callback.message.text + "\n\n👀 Увидел",
-        reply_markup=keyboard
-    )
-
-    await callback.answer("Отмечено")
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    keyboard = callback.message.reply_markup
+    await update_status(callback,"🎤 Записано",task_id,True)
 
-    user = callback.from_user.username
-
-    task = tasks.get(task_id)
-
-    if task:
-        await bot.send_message(
-            task["chat"],
-            f"🎤 @{user} записал роль\n📂 {task['topic']}"
-        )
-
-        del tasks[task_id]
-
-    await callback.message.edit_text(
-        callback.message.text + f"\n\n🎤 Записано: @{user}",
-        reply_markup=keyboard
-    )
-
-    await callback.answer("Отмечено")
+    await callback.answer()
 
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    keyboard = callback.message.reply_markup
+    await update_status(callback,"❌ Не участвует",task_id,True)
 
-    user = callback.from_user.username
-
-    task = tasks.get(task_id)
-
-    if task:
-        await bot.send_message(
-            task["chat"],
-            f"❌ @{user} не участвует\n📂 {task['topic']}"
-        )
-
-        del tasks[task_id]
-
-    await callback.message.edit_text(
-        callback.message.text + f"\n\n❌ Не участвует: @{user}",
-        reply_markup=keyboard
-    )
-
-    await callback.answer("Отмечено")
-
-# ---------- запуск ----------
+    await callback.answer()
 
 async def main():
 
