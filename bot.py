@@ -64,6 +64,9 @@ topics = load_json(TOPICS_FILE)
 tasks = {}
 actor_selection = {}
 
+task_status = {}
+status_messages = {}
+
 
 def topic_key(chat_id, thread_id):
     return f"{chat_id}:{thread_id}"
@@ -78,7 +81,7 @@ def find_actor_by_id(user_id):
     return None
 
 
-# -------- получение названия темы --------
+# ---------- тема ----------
 
 async def get_topic_name(message):
 
@@ -113,7 +116,19 @@ async def ensure_topic_saved(message: types.Message):
         save_json(TOPICS_FILE, topics)
 
 
-# -------- регистрация --------
+# ---------- таблица статусов ----------
+
+def build_status_text(task_id):
+
+    lines = ["📊 Статусы актёров\n"]
+
+    for actor, status in task_status[task_id].items():
+        lines.append(f"{actor} — {status}")
+
+    return "\n".join(lines)
+
+
+# ---------- регистрация ----------
 
 @dp.message(Command("start"))
 async def start(message: types.Message, state: FSMContext):
@@ -129,6 +144,7 @@ async def start(message: types.Message, state: FSMContext):
         return
 
     await state.set_state(Register.entering_nick)
+
     await message.answer("Введи свой ник актёра.")
 
 
@@ -158,7 +174,7 @@ async def save_nick(message: types.Message, state: FSMContext):
     )
 
 
-# -------- меню --------
+# ---------- меню ----------
 
 @dp.message(F.text == "🎭 Мой ник")
 async def my_nick(message: types.Message):
@@ -180,34 +196,14 @@ async def change_nick(message: types.Message, state: FSMContext):
     await message.answer("Введи новый ник.")
 
 
-# -------- ping --------
+# ---------- ping ----------
 
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
 
-# -------- темы --------
-
-@dp.message(F.forum_topic_created)
-async def topic_created(message: types.Message):
-
-    key = topic_key(message.chat.id, message.message_thread_id)
-
-    topics[key] = message.forum_topic_created.name
-    save_json(TOPICS_FILE, topics)
-
-
-@dp.message(F.forum_topic_edited)
-async def topic_edited(message: types.Message):
-
-    key = topic_key(message.chat.id, message.message_thread_id)
-
-    topics[key] = message.forum_topic_edited.name
-    save_json(TOPICS_FILE, topics)
-
-
-# -------- субтитры --------
+# ---------- субтитры ----------
 
 def is_subtitles(message: types.Message):
 
@@ -239,7 +235,7 @@ async def subtitles_detect(message: types.Message):
     await message.reply("🎬 Панель серии", reply_markup=keyboard)
 
 
-# -------- меню актёров --------
+# ---------- меню актёров ----------
 
 def build_actor_menu(message_id):
 
@@ -305,7 +301,7 @@ async def toggle_actor(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
 
-# -------- отправка задания --------
+# ---------- отправка задания ----------
 
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
@@ -323,91 +319,81 @@ async def send_task(callback: types.CallbackQuery):
     key = topic_key(chat_id, thread_id)
     topic = topics.get(key, "Без темы")
 
-    chat_str = str(chat_id)
-    chat_link_id = chat_str[4:] if chat_str.startswith("-100") else chat_str
+    task_id = str(message_id)
 
-    message_link = f"https://t.me/c/{chat_link_id}/{message_id}"
+    task_status[task_id] = {}
+
+    for actor in selected:
+        task_status[task_id][actor] = "⏳"
+
+    status_msg = await bot.send_message(
+        chat_id=chat_id,
+        message_thread_id=thread_id,
+        text=build_status_text(task_id)
+    )
+
+    status_messages[task_id] = status_msg.message_id
 
     for actor_name in selected:
 
         user_id = actors[actor_name]["id"]
 
-        task_id = f"{message_id}_{user_id}"
-
-        tasks[task_id] = {
-            "chat": chat_id,
-            "thread": thread_id,
-            "topic": topic,
-            "link": message_link,
-            "original": message_id
-        }
-
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
-                [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}"),
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}")
+                    InlineKeyboardButton(
+                        text="👀 Увидел",
+                        callback_data=f"seen:{task_id}"
+                    ),
+                    InlineKeyboardButton(
+                        text="🎤 Записано",
+                        callback_data=f"done:{task_id}"
+                    )
                 ],
                 [
-                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}")
+                    InlineKeyboardButton(
+                        text="❌ Не участвую",
+                        callback_data=f"skip:{task_id}"
+                    )
                 ]
             ]
         )
 
         try:
 
-            await bot.copy_message(
-                chat_id=user_id,
-                from_chat_id=chat_id,
-                message_id=message_id
-            )
-
             await bot.send_message(
                 user_id,
-                f"🎙 Вам пришло на озвучку\n\n📂 {topic}\n\nСтатус: ⏳ ожидание",
+                f"🎙 Вам пришло на озвучку\n\n📂 {topic}",
                 reply_markup=keyboard
             )
 
         except Exception as e:
+
             logging.error(f"Cannot send task to {actor_name}: {e}")
 
     await callback.answer()
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
 
-# -------- статусы --------
+# ---------- обновление статуса ----------
 
-async def update_status(callback, status, task_id, stop_timer=False):
+async def update_status(callback, status, task_id):
 
-    keyboard = callback.message.reply_markup
+    actor_name = find_actor_by_id(callback.from_user.id)
 
-    lines = callback.message.text.split("\n")
-    new_lines = []
+    if actor_name:
 
-    for line in lines:
-        if not line.startswith("Статус:"):
-            new_lines.append(line)
+        task_status[task_id][actor_name] = status
 
-    new_lines.append(f"Статус: {status}")
+        msg_id = status_messages.get(task_id)
 
-    await callback.message.edit_text("\n".join(new_lines), reply_markup=keyboard)
+        if msg_id:
 
-    task = tasks.get(task_id)
-
-    if task:
-
-        user = callback.from_user.username or callback.from_user.first_name
-
-        await bot.send_message(
-            chat_id=task["chat"],
-            message_thread_id=task["thread"],
-            reply_to_message_id=task["original"],
-            text=f"{status} @{user}\n📂 {task['topic']}\n🔗 {task['link']}"
-        )
-
-        if stop_timer:
-            del tasks[task_id]
+            await bot.edit_message_text(
+                chat_id=callback.message.chat.id,
+                message_id=msg_id,
+                text=build_status_text(task_id)
+            )
 
 
 @dp.callback_query(F.data.startswith("seen:"))
@@ -415,7 +401,7 @@ async def seen(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    await update_status(callback, "👀 Увидел", task_id, False)
+    await update_status(callback, "👀", task_id)
 
     await callback.answer()
 
@@ -425,7 +411,7 @@ async def done(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    await update_status(callback, "🎤 Записано", task_id, True)
+    await update_status(callback, "🎤", task_id)
 
     await callback.answer()
 
@@ -435,12 +421,12 @@ async def skip(callback: types.CallbackQuery):
 
     task_id = callback.data.split(":")[1]
 
-    await update_status(callback, "❌ Не участвует", task_id, True)
+    await update_status(callback, "❌", task_id)
 
     await callback.answer()
 
 
-# -------- webhook --------
+# ---------- webhook ----------
 
 async def webhook_handler(request):
 
