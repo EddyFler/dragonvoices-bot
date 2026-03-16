@@ -15,8 +15,6 @@ TOPICS_FILE = "topics.json"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------- загрузка файлов ----------
-
 def load_json(path):
     if os.path.exists(path):
         with open(path, "r", encoding="utf-8") as f:
@@ -47,19 +45,12 @@ async def start(message: types.Message):
 
     waiting_for_nick[user_id] = True
 
-    await message.answer(
-        "Привет! Введи свой ник актёра для проекта.\n"
-        "Например: Eddy"
-    )
+    await message.answer("Введи свой ник актёра.")
 
-@dp.message()
-async def get_actor_nick(message: types.Message):
+@dp.message(F.from_user.id.in_(lambda: waiting_for_nick.keys()))
+async def save_nick(message: types.Message):
 
     user_id = message.from_user.id
-
-    if user_id not in waiting_for_nick:
-        return
-
     nick = message.text.strip()
 
     actors[nick] = {
@@ -71,9 +62,15 @@ async def get_actor_nick(message: types.Message):
 
     waiting_for_nick.pop(user_id)
 
-    await message.answer(f"Ник сохранён: {nick}\nТеперь ты будешь получать задания.")
+    await message.answer(f"Ник сохранён: {nick}")
 
-# ---------- отслеживание тем ----------
+# ---------- ping ----------
+
+@dp.message(Command("ping"))
+async def ping(message: types.Message):
+    await message.answer("pong")
+
+# ---------- темы ----------
 
 @dp.message(F.forum_topic_created)
 async def topic_created(message: types.Message):
@@ -93,30 +90,37 @@ async def topic_edited(message: types.Message):
     topics[thread] = name
     save_json(TOPICS_FILE, topics)
 
-# ---------- панель под субтитрами ----------
+# ---------- определение субтитров ----------
 
-@dp.message(Command("panel"))
-async def panel(message: types.Message):
+def is_subtitles(message: types.Message):
 
-    if not message.reply_to_message:
-        await message.reply("Ответь /panel на сообщение с субтитрами.")
+    if not message.document:
+        return False
+
+    name = message.document.file_name.lower()
+
+    return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
+
+# ---------- авто панель ----------
+
+@dp.message(F.document)
+async def subtitles_detect(message: types.Message):
+
+    if not is_subtitles(message):
         return
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [InlineKeyboardButton(
                 text="🎙 Назначить актёров",
-                callback_data=f"assign:{message.reply_to_message.message_id}"
+                callback_data=f"assign:{message.message_id}"
             )]
         ]
     )
 
-    await message.reply_to_message.reply(
-        "🎬 Панель серии",
-        reply_markup=keyboard
-    )
+    await message.reply("🎬 Панель серии", reply_markup=keyboard)
 
-# ---------- меню выбора актёров ----------
+# ---------- меню актёров ----------
 
 def build_actor_menu(message_id):
 
@@ -156,12 +160,9 @@ async def open_actor_menu(callback: types.CallbackQuery):
 
     keyboard = build_actor_menu(message_id)
 
-    await callback.message.edit_text(
-        "Выберите актёров:",
-        reply_markup=keyboard
-    )
+    await callback.message.edit_text("Выберите актёров:", reply_markup=keyboard)
 
-# ---------- переключение галочек ----------
+# ---------- переключение ----------
 
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_actor(callback: types.CallbackQuery):
@@ -187,7 +188,6 @@ async def toggle_actor(callback: types.CallbackQuery):
 async def send_task(callback: types.CallbackQuery):
 
     message_id = int(callback.data.split(":")[1])
-
     selected = actor_selection.get(message_id, [])
 
     if not selected:
@@ -200,10 +200,7 @@ async def send_task(callback: types.CallbackQuery):
     topic = topics.get(str(thread_id), "Без темы")
 
     chat_str = str(chat_id)
-    if chat_str.startswith("-100"):
-        chat_link_id = chat_str[4:]
-    else:
-        chat_link_id = chat_str
+    chat_link_id = chat_str[4:] if chat_str.startswith("-100") else chat_str
 
     message_link = f"https://t.me/c/{chat_link_id}/{message_id}"
 
@@ -248,7 +245,7 @@ async def send_task(callback: types.CallbackQuery):
 
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
-# ---------- обновление статуса ----------
+# ---------- статусы ----------
 
 async def update_status(callback, status, task_id, stop_timer=False):
 
@@ -263,9 +260,7 @@ async def update_status(callback, status, task_id, stop_timer=False):
 
     new_lines.append(f"Статус: {status}")
 
-    new_text = "\n".join(new_lines)
-
-    await callback.message.edit_text(new_text, reply_markup=keyboard)
+    await callback.message.edit_text("\n".join(new_lines), reply_markup=keyboard)
 
     task = tasks.get(task_id)
 
