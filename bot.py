@@ -2,12 +2,17 @@ import asyncio
 import json
 import os
 import logging
+from aiohttp import web
 
 from aiogram import Bot, Dispatcher, types, F
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, Update
 from aiogram.filters import Command
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 TOKEN = "8618936533:AAGPKLwykJl4RWzTukDB4mXUd12bGaPZPFk"
+
+BASE_URL = "https://dragonvoices-bot.onrender.com"
+WEBHOOK_PATH = "/webhook"
+WEBHOOK_URL = BASE_URL + WEBHOOK_PATH
 
 ACTORS_FILE = "actors.json"
 TOPICS_FILE = "topics.json"
@@ -15,7 +20,7 @@ TOPICS_FILE = "topics.json"
 bot = Bot(token=TOKEN)
 dp = Dispatcher()
 
-# ---------- загрузка / сохранение ----------
+# ---------------- JSON ----------------
 
 def load_json(path):
     if os.path.exists(path):
@@ -34,7 +39,7 @@ tasks = {}
 waiting_for_nick = {}
 actor_selection = {}
 
-# ---------- регистрация актёров ----------
+# ---------------- регистрация ----------------
 
 @dp.message(Command("start"))
 async def start(message: types.Message):
@@ -68,15 +73,15 @@ async def save_nick(message: types.Message):
 
     waiting_for_nick.pop(user_id)
 
-    await message.answer(f"Ник сохранён: {nick}. Теперь ты будешь получать задания.")
+    await message.answer(f"Ник сохранён: {nick}")
 
-# ---------- ping ----------
+# ---------------- ping ----------------
 
 @dp.message(Command("ping"))
 async def ping(message: types.Message):
     await message.answer("pong")
 
-# ---------- темы ----------
+# ---------------- темы ----------------
 
 @dp.message(F.forum_topic_created)
 async def topic_created(message: types.Message):
@@ -96,7 +101,7 @@ async def topic_edited(message: types.Message):
     topics[thread] = name
     save_json(TOPICS_FILE, topics)
 
-# ---------- определение субтитров ----------
+# ---------------- субтитры ----------------
 
 def is_subtitles(message: types.Message):
 
@@ -106,8 +111,6 @@ def is_subtitles(message: types.Message):
     name = message.document.file_name.lower()
 
     return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
-
-# ---------- автоматическая панель ----------
 
 @dp.message(F.document)
 async def subtitles_detect(message: types.Message):
@@ -126,7 +129,7 @@ async def subtitles_detect(message: types.Message):
 
     await message.reply("🎬 Панель серии", reply_markup=keyboard)
 
-# ---------- меню выбора актёров ----------
+# ---------------- меню актёров ----------------
 
 def build_actor_menu(message_id):
 
@@ -171,7 +174,7 @@ async def open_actor_menu(callback: types.CallbackQuery):
         reply_markup=keyboard
     )
 
-# ---------- переключение галочек ----------
+# ---------------- переключение ----------------
 
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_actor(callback: types.CallbackQuery):
@@ -191,7 +194,7 @@ async def toggle_actor(callback: types.CallbackQuery):
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
-# ---------- отправка задания ----------
+# ---------------- отправка задания ----------------
 
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
@@ -254,7 +257,7 @@ async def send_task(callback: types.CallbackQuery):
 
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
-# ---------- обновление статусов ----------
+# ---------------- статусы ----------------
 
 async def update_status(callback, status, task_id, stop_timer=False):
 
@@ -308,15 +311,35 @@ async def skip(callback: types.CallbackQuery):
     await update_status(callback, "❌ Не участвует", task_id, True)
     await callback.answer()
 
-# ---------- запуск ----------
+# ---------------- webhook сервер ----------------
 
-async def main():
+async def webhook_handler(request):
+    data = await request.json()
+    update = Update.model_validate(data)
+    await dp.feed_update(bot, update)
+    return web.Response()
+
+async def on_startup(app):
+    await bot.set_webhook(WEBHOOK_URL)
+
+async def on_shutdown(app):
+    await bot.delete_webhook()
+
+def create_app():
+
+    app = web.Application()
+
+    app.router.add_post(WEBHOOK_PATH, webhook_handler)
+
+    app.on_startup.append(on_startup)
+    app.on_shutdown.append(on_shutdown)
+
+    return app
+
+# ---------------- запуск ----------------
+
+if __name__ == "__main__":
 
     logging.basicConfig(level=logging.INFO)
 
-    await bot.delete_webhook(drop_pending_updates=True)
-
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
+    web.run_app(create_app(), host="0.0.0.0", port=10000)
