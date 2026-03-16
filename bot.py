@@ -58,15 +58,14 @@ spreadsheet = client.open_by_key(
 )
 
 actors_sheet = spreadsheet.worksheet("actors")
-topics_sheet = spreadsheet.worksheet("topics")
 
 
 # ---------- STORAGE ----------
 
-tasks = {}
 actor_selection = {}
 task_status = {}
 status_messages = {}
+task_meta = {}
 
 
 # ---------- FSM ----------
@@ -141,12 +140,19 @@ def get_actor_id_by_nick(nick):
 
 def build_status(task_id):
 
-    lines = ["📊 Статус актёров:\n"]
+    lines = ["📊 Статусы актёров\n"]
 
     for actor, status in task_status[task_id].items():
         lines.append(f"{actor} — {status}")
 
     return "\n".join(lines)
+
+
+# ---------- COMMANDS ----------
+
+@dp.message(Command("ping"))
+async def ping(message: types.Message):
+    await message.answer("pong")
 
 
 # ---------- START ----------
@@ -225,41 +231,6 @@ async def process_change(message: types.Message, state: FSMContext):
     await message.answer(
         f"Ник изменён на: {new_nick}",
         reply_markup=user_menu
-    )
-
-
-# ---------- SUBTITLES ----------
-
-def is_subtitles(message):
-
-    if not message.document:
-        return False
-
-    name = message.document.file_name.lower()
-
-    return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
-
-
-@dp.message(F.document)
-async def subtitles_detect(message: types.Message):
-
-    if not is_subtitles(message):
-        return
-
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="🎙 Назначить актёров",
-                    callback_data=f"assign:{message.message_id}"
-                )
-            ]
-        ]
-    )
-
-    await message.reply(
-        "🎬 Панель серии",
-        reply_markup=keyboard
     )
 
 
@@ -351,7 +322,7 @@ async def send_task(callback: types.CallbackQuery):
     task_status[task_id] = {}
 
     for actor in selected:
-        task_status[task_id][actor] = "⏳ ожидание"
+        task_status[task_id][actor] = "⏳"
 
     status_msg = await bot.send_message(
         chat_id=chat_id,
@@ -360,6 +331,7 @@ async def send_task(callback: types.CallbackQuery):
     )
 
     status_messages[task_id] = status_msg.message_id
+    task_meta[task_id] = (chat_id, thread_id)
 
     for actor_name in selected:
 
@@ -368,18 +340,27 @@ async def send_task(callback: types.CallbackQuery):
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{actor_name}"),
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{actor_name}")
+                    InlineKeyboardButton(
+                        text="👀 Увидел",
+                        callback_data=f"seen:{task_id}:{actor_name}"
+                    ),
+                    InlineKeyboardButton(
+                        text="🎤 Записано",
+                        callback_data=f"done:{task_id}:{actor_name}"
+                    )
                 ],
                 [
-                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{actor_name}")
+                    InlineKeyboardButton(
+                        text="❌ Не участвую",
+                        callback_data=f"skip:{task_id}:{actor_name}"
+                    )
                 ]
             ]
         )
 
         await bot.send_message(
             user_id,
-            f"🎙 Вам пришло на озвучку",
+            "🎙 Вам пришло на озвучку\n\nСтатус: ⏳ ожидание",
             reply_markup=keyboard
         )
 
@@ -393,12 +374,14 @@ async def update_status(task_id, actor, status):
     task_status[task_id][actor] = status
 
     msg_id = status_messages.get(task_id)
+    chat_id, thread_id = task_meta[task_id]
 
     if msg_id:
 
         await bot.edit_message_text(
             text=build_status(task_id),
-            chat_id=list(tasks.values())[0]["chat"] if tasks else None,
+            chat_id=chat_id,
+            message_thread_id=thread_id,
             message_id=msg_id
         )
 
@@ -408,7 +391,7 @@ async def seen(callback: types.CallbackQuery):
 
     _, task_id, actor = callback.data.split(":")
 
-    await update_status(task_id, actor, "👀 увидел")
+    await update_status(task_id, actor, "👀")
 
     await callback.answer()
 
@@ -418,7 +401,7 @@ async def done(callback: types.CallbackQuery):
 
     _, task_id, actor = callback.data.split(":")
 
-    await update_status(task_id, actor, "🎤 записано")
+    await update_status(task_id, actor, "✅")
 
     await callback.answer()
 
@@ -428,7 +411,7 @@ async def skip(callback: types.CallbackQuery):
 
     _, task_id, actor = callback.data.split(":")
 
-    await update_status(task_id, actor, "❌ отказ")
+    await update_status(task_id, actor, "❌")
 
     await callback.answer()
 
