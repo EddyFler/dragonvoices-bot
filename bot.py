@@ -20,7 +20,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 
 
-TOKEN = "ТВОЙ_ТОКЕН"
+TOKEN = "8618936533:AAGPKLwykJl4RWzTukDB4mXUd12bGaPZPFk"
 
 BASE_URL = "https://dragonvoices-bot.onrender.com"
 WEBHOOK_PATH = "/webhook"
