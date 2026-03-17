@@ -2,7 +2,6 @@ import logging
 import os
 import json
 from aiohttp import web
-
 import gspread
 from google.oauth2.service_account import Credentials
 
@@ -41,7 +40,7 @@ scope = [
 
 CREDS_PATH = "/etc/secrets/credentials.json"
 
-with open(CREDS_PATH, "r") as f:
+with open(CREDS_PATH) as f:
     creds_dict = json.load(f)
 
 creds_dict["private_key"] = creds_dict["private_key"].replace("\\n", "\n")
@@ -52,16 +51,14 @@ creds = Credentials.from_service_account_info(
 )
 
 client = gspread.authorize(creds)
-
-spreadsheet = client.open_by_key(
-    "1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0"
-)
+spreadsheet = client.open_by_key("1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0")
 
 actors_sheet = spreadsheet.worksheet("actors")
 
 
 # ---------- STORAGE ----------
 
+tasks = {}
 actor_selection = {}
 task_status = {}
 status_messages = {}
@@ -121,7 +118,6 @@ def update_actor(user_id, nick):
 def get_all_actors():
 
     rows = actors_sheet.get_all_records()
-
     return [r["nick"] for r in rows]
 
 
@@ -169,11 +165,9 @@ async def start(message: types.Message, state: FSMContext):
             f"Ты уже зарегистрирован как: {nick}",
             reply_markup=user_menu
         )
-
         return
 
     await state.set_state(Register.entering_nick)
-
     await message.answer("Введи свой ник актёра.")
 
 
@@ -215,7 +209,6 @@ async def my_nick(message: types.Message):
 async def change_nick(message: types.Message, state: FSMContext):
 
     await state.set_state(ChangeNick.entering_new_nick)
-
     await message.answer("Введи новый ник.")
 
 
@@ -231,6 +224,45 @@ async def process_change(message: types.Message, state: FSMContext):
     await message.answer(
         f"Ник изменён на: {new_nick}",
         reply_markup=user_menu
+    )
+
+
+# ---------- SUBTITLES ----------
+
+def is_subtitles(message):
+
+    if not message.document:
+        return False
+
+    name = message.document.file_name
+    if not name:
+        return False
+
+    name = name.lower()
+
+    return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
+
+
+@dp.message(F.document)
+async def subtitles_detect(message: types.Message):
+
+    if not is_subtitles(message):
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🎙 Назначить актёров",
+                    callback_data=f"assign:{message.message_id}"
+                )
+            ]
+        ]
+    )
+
+    await message.reply(
+        "🎬 Панель серии",
+        reply_markup=keyboard
     )
 
 
@@ -317,7 +349,19 @@ async def send_task(callback: types.CallbackQuery):
     chat_id = callback.message.chat.id
     thread_id = callback.message.message_thread_id
 
+    chat_str = str(chat_id)
+    chat_link_id = chat_str[4:]
+
+    message_link = f"https://t.me/c/{chat_link_id}/{message_id}"
+
     task_id = str(message_id)
+
+    tasks[task_id] = {
+        "chat": chat_id,
+        "thread": thread_id,
+        "link": message_link,
+        "original": message_id
+    }
 
     task_status[task_id] = {}
 
@@ -339,23 +383,21 @@ async def send_task(callback: types.CallbackQuery):
 
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
                 [
-                    InlineKeyboardButton(
-                        text="👀 Увидел",
-                        callback_data=f"seen:{task_id}:{actor_name}"
-                    ),
-                    InlineKeyboardButton(
-                        text="🎤 Записано",
-                        callback_data=f"done:{task_id}:{actor_name}"
-                    )
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{actor_name}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{actor_name}")
                 ],
                 [
-                    InlineKeyboardButton(
-                        text="❌ Не участвую",
-                        callback_data=f"skip:{task_id}:{actor_name}"
-                    )
+                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{actor_name}")
                 ]
             ]
+        )
+
+        await bot.copy_message(
+            chat_id=user_id,
+            from_chat_id=chat_id,
+            message_id=message_id
         )
 
         await bot.send_message(
@@ -369,7 +411,7 @@ async def send_task(callback: types.CallbackQuery):
 
 # ---------- UPDATE STATUS ----------
 
-async def update_status(task_id, actor, status):
+async def update_status(callback, task_id, actor, status):
 
     task_status[task_id][actor] = status
 
@@ -385,14 +427,25 @@ async def update_status(task_id, actor, status):
             message_id=msg_id
         )
 
+    task = tasks.get(task_id)
+
+    if task:
+
+        user = callback.from_user.username or callback.from_user.first_name
+
+        await bot.send_message(
+            chat_id=task["chat"],
+            message_thread_id=task["thread"],
+            reply_to_message_id=task["original"],
+            text=f"{status} @{user}\n🔗 {task['link']}"
+        )
+
 
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
     _, task_id, actor = callback.data.split(":")
-
-    await update_status(task_id, actor, "👀")
-
+    await update_status(callback, task_id, actor, "👀")
     await callback.answer()
 
 
@@ -400,9 +453,7 @@ async def seen(callback: types.CallbackQuery):
 async def done(callback: types.CallbackQuery):
 
     _, task_id, actor = callback.data.split(":")
-
-    await update_status(task_id, actor, "✅")
-
+    await update_status(callback, task_id, actor, "✅")
     await callback.answer()
 
 
@@ -410,9 +461,7 @@ async def done(callback: types.CallbackQuery):
 async def skip(callback: types.CallbackQuery):
 
     _, task_id, actor = callback.data.split(":")
-
-    await update_status(task_id, actor, "❌")
-
+    await update_status(callback, task_id, actor, "❌")
     await callback.answer()
 
 
@@ -423,9 +472,7 @@ async def webhook_handler(request):
     try:
 
         data = await request.json()
-
         update = Update.model_validate(data)
-
         await dp.feed_update(bot, update)
 
     except Exception:
@@ -438,7 +485,6 @@ async def webhook_handler(request):
 async def on_startup(app):
 
     await bot.delete_webhook(drop_pending_updates=True)
-
     await bot.set_webhook(WEBHOOK_URL)
 
 
