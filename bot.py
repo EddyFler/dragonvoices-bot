@@ -198,43 +198,6 @@ async def save_nick(message: types.Message, state: FSMContext):
     )
 
 
-# ---------- MY NICK ----------
-
-@dp.message(F.text == "🎭 Мой ник")
-async def my_nick(message: types.Message):
-
-    nick = find_actor_by_id(message.from_user.id)
-
-    if nick:
-        await message.answer(f"Твой ник: {nick}")
-    else:
-        await message.answer("Ты ещё не зарегистрирован.")
-
-
-# ---------- CHANGE NICK ----------
-
-@dp.message(F.text == "✏ Сменить ник")
-async def change_nick(message: types.Message, state: FSMContext):
-
-    await state.set_state(ChangeNick.entering_new_nick)
-    await message.answer("Введи новый ник.")
-
-
-@dp.message(ChangeNick.entering_new_nick)
-async def process_change(message: types.Message, state: FSMContext):
-
-    new_nick = message.text.strip()
-
-    update_actor(message.from_user.id, new_nick)
-
-    await state.clear()
-
-    await message.answer(
-        f"Ник изменён на: {new_nick}",
-        reply_markup=user_menu
-    )
-
-
 # ---------- SUBTITLES ----------
 
 def is_subtitles(message: types.Message):
@@ -438,10 +401,24 @@ async def update_status(callback, task_id, user_id, status):
 
     if actor_msg:
 
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Открыть сообщение", url=tasks[task_id]["link"])],
+                [
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
+                ],
+                [
+                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{user_id}")
+                ]
+            ]
+        )
+
         await bot.edit_message_text(
             chat_id=user_id,
             message_id=actor_msg,
-            text=f"🎙 Вам пришло на озвучку\n\nСтатус: {status}"
+            text=f"🎙 Вам пришло на озвучку\n\nСтатус: {status}",
+            reply_markup=keyboard
         )
 
 
