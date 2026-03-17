@@ -1,3 +1,4 @@
+
 import logging
 import os
 import json
@@ -132,69 +133,19 @@ def get_actor_id_by_nick(nick):
     return None
 
 
-# ---------- TOPICS ----------
-
-def save_topic(chat_id, thread_id, name):
-
-    topics_sheet.append_row([
-        chat_id,
-        thread_id,
-        name
-    ])
-
-
-def get_topic(chat_id, thread_id):
-
-    rows = topics_sheet.get_all_records()
-
-    for r in rows:
-        if int(r["chat_id"]) == chat_id and int(r["thread_id"]) == thread_id:
-            return r["name"]
-
-    return None
-
-
-async def get_topic_name(message):
-
-    if message.reply_to_message:
-        if message.reply_to_message.forum_topic_created:
-            return message.reply_to_message.forum_topic_created.name
-
-    if message.forum_topic_created:
-        return message.forum_topic_created.name
-
-    if message.forum_topic_edited:
-        return message.forum_topic_edited.name
-
-    return None
-
-
-async def ensure_topic_saved(message):
-
-    if not message.message_thread_id:
-        return
-
-    name = await get_topic_name(message)
-
-    if name:
-
-        if not get_topic(message.chat.id, message.message_thread_id):
-
-            save_topic(
-                message.chat.id,
-                message.message_thread_id,
-                name
-            )
-
-
 # ---------- STATUS TEXT ----------
 
 def build_status(task_id):
 
     lines = ["📊 Статусы актёров\n"]
 
-    for actor, status in task_status[task_id].items():
-        lines.append(f"{actor} — {status}")
+    for user_id, status in task_status[task_id].items():
+
+        nick = find_actor_by_id(user_id)
+        if not nick:
+            nick = f"id:{user_id}"
+
+        lines.append(f"{nick} — {status}")
 
     return "\n".join(lines)
 
@@ -284,8 +235,6 @@ async def process_change(message: types.Message, state: FSMContext):
 
 # ---------- SUBTITLES ----------
 
-# ---------- SUBTITLES ----------
-
 def is_subtitles(message: types.Message):
 
     if not message.document:
@@ -317,6 +266,7 @@ async def subtitles_detect(message: types.Message):
         "🎬 Панель серии",
         reply_markup=keyboard
     )
+
 
 # ---------- ACTOR MENU ----------
 
@@ -417,8 +367,9 @@ async def send_task(callback: types.CallbackQuery):
 
     task_status[task_id] = {}
 
-    for actor in selected:
-        task_status[task_id][actor] = "⏳"
+    for actor_name in selected:
+        user_id = get_actor_id_by_nick(actor_name)
+        task_status[task_id][user_id] = "⏳"
 
     status_msg = await bot.send_message(
         chat_id=chat_id,
@@ -437,11 +388,11 @@ async def send_task(callback: types.CallbackQuery):
             inline_keyboard=[
                 [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{actor_name}"),
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{actor_name}")
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
                 ],
                 [
-                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{actor_name}")
+                    InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{user_id}")
                 ]
             ]
         )
@@ -463,9 +414,9 @@ async def send_task(callback: types.CallbackQuery):
 
 # ---------- UPDATE STATUS ----------
 
-async def update_status(callback, task_id, actor, status):
+async def update_status(callback, task_id, user_id, status):
 
-    task_status[task_id][actor] = status
+    task_status[task_id][user_id] = status
 
     msg_id = status_messages.get(task_id)
     chat_id, thread_id = task_meta[task_id]
@@ -475,7 +426,6 @@ async def update_status(callback, task_id, actor, status):
         await bot.edit_message_text(
             text=build_status(task_id),
             chat_id=chat_id,
-            message_thread_id=thread_id,
             message_id=msg_id
         )
 
@@ -496,24 +446,24 @@ async def update_status(callback, task_id, actor, status):
 @dp.callback_query(F.data.startswith("seen:"))
 async def seen(callback: types.CallbackQuery):
 
-    _, task_id, actor = callback.data.split(":")
-    await update_status(callback, task_id, actor, "👀")
+    _, task_id, user_id = callback.data.split(":")
+    await update_status(callback, task_id, int(user_id), "👀")
     await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery):
 
-    _, task_id, actor = callback.data.split(":")
-    await update_status(callback, task_id, actor, "✅")
+    _, task_id, user_id = callback.data.split(":")
+    await update_status(callback, task_id, int(user_id), "✅")
     await callback.answer()
 
 
 @dp.callback_query(F.data.startswith("skip:"))
 async def skip(callback: types.CallbackQuery):
 
-    _, task_id, actor = callback.data.split(":")
-    await update_status(callback, task_id, actor, "❌")
+    _, task_id, user_id = callback.data.split(":")
+    await update_status(callback, task_id, int(user_id), "❌")
     await callback.answer()
 
 
