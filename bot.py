@@ -134,6 +134,22 @@ def get_actor_id_by_nick(nick):
     return None
 
 
+# ---------- TOPIC NAME ----------
+
+async def get_topic_name(message: types.Message):
+
+    if message.reply_to_message:
+        if message.reply_to_message.forum_topic_created:
+            return message.reply_to_message.forum_topic_created.name
+
+    if message.forum_topic_created:
+        return message.forum_topic_created.name
+
+    if message.forum_topic_edited:
+        return message.forum_topic_edited.name
+
+    return None
+
 # ---------- STATUS TEXT ----------
 
 def build_status(task_id):
@@ -339,9 +355,13 @@ async def toggle_actor(callback: types.CallbackQuery):
 
 # ---------- SEND TASK ----------
 
+
+
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
 
+    topic_name = await get_topic_name(callback.message)
+    
     message_id = int(callback.data.split(":")[1])
     selected = actor_selection.get(message_id, [])
 
@@ -360,11 +380,12 @@ async def send_task(callback: types.CallbackQuery):
     task_id = str(message_id)
 
     tasks[task_id] = {
-        "chat": chat_id,
-        "thread": thread_id,
-        "link": message_link,
-        "original": message_id
-    }
+    "chat": chat_id,
+    "thread": thread_id,
+    "link": message_link,
+    "original": message_id,
+    "topic": topic_name
+}
 
     task_status[task_id] = {}
 
@@ -406,10 +427,12 @@ async def send_task(callback: types.CallbackQuery):
         )
 
         msg = await bot.send_message(
-            user_id,
-            "🎙 Вам пришло на озвучку\n\nСтатус: ⏳",
-            reply_markup=keyboard
-        )
+    user_id,
+    f"🎙 Вам пришло на озвучку\n\n"
+    f"📂 Тема: {topic_name}\n\n"
+    f"Статус: ⏳",
+    reply_markup=keyboard
+)
 
         actor_messages[(task_id, user_id)] = msg.message_id
 
@@ -453,7 +476,7 @@ async def update_status(callback, task_id, user_id, status):
         await bot.edit_message_text(
             chat_id=user_id,
             message_id=actor_msg,
-            text=f"🎙 Вам пришло на озвучку\n\nСтатус: {status}",
+            text=f"🎙 Вам пришло на озвучку\n\n📂 Тема: {tasks[task_id]['topic']}\n\nСтатус: {status}",
             reply_markup=keyboard
         )
 
