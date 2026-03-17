@@ -132,6 +132,61 @@ def get_actor_id_by_nick(nick):
     return None
 
 
+# ---------- TOPICS ----------
+
+def save_topic(chat_id, thread_id, name):
+
+    topics_sheet.append_row([
+        chat_id,
+        thread_id,
+        name
+    ])
+
+
+def get_topic(chat_id, thread_id):
+
+    rows = topics_sheet.get_all_records()
+
+    for r in rows:
+        if int(r["chat_id"]) == chat_id and int(r["thread_id"]) == thread_id:
+            return r["name"]
+
+    return None
+
+
+async def get_topic_name(message):
+
+    if message.reply_to_message:
+        if message.reply_to_message.forum_topic_created:
+            return message.reply_to_message.forum_topic_created.name
+
+    if message.forum_topic_created:
+        return message.forum_topic_created.name
+
+    if message.forum_topic_edited:
+        return message.forum_topic_edited.name
+
+    return None
+
+
+async def ensure_topic_saved(message):
+
+    if not message.message_thread_id:
+        return
+
+    name = await get_topic_name(message)
+
+    if name:
+
+        if not get_topic(message.chat.id, message.message_thread_id):
+
+            save_topic(
+                message.chat.id,
+                message.message_thread_id,
+                name
+            )
+
+
 # ---------- STATUS TEXT ----------
 
 def build_status(task_id):
