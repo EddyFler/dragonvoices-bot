@@ -55,7 +55,7 @@ client = gspread.authorize(creds)
 spreadsheet = client.open_by_key("1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0")
 
 actors_sheet = spreadsheet.worksheet("actors")
-
+topics_sheet = spreadsheet.worksheet("topics")
 
 # ---------- STORAGE ----------
 
@@ -132,24 +132,56 @@ def get_actor_id_by_nick(nick):
             return int(r["user_id"])
 
     return None
+# ---------- TOPICS ----------
+
+def save_topic(chat_id, thread_id, name):
+
+    topics_sheet.append_row([
+        chat_id,
+        thread_id,
+        name
+    ])
 
 
-# ---------- TOPIC NAME ----------
+def get_topic(chat_id, thread_id):
 
-async def get_topic_name(message: types.Message):
+    rows = topics_sheet.get_all_records()
 
-    if message.chat.type == "supergroup" and message.message_thread_id:
-
-        try:
-            topic = await bot.get_forum_topic(
-                chat_id=message.chat.id,
-                message_thread_id=message.message_thread_id
-            )
-            return topic.name
-        except:
-            pass
+    for r in rows:
+        if int(r["chat_id"]) == chat_id and int(r["thread_id"]) == thread_id:
+            return r["name"]
 
     return None
+
+
+async def detect_topic(message: types.Message):
+
+    if message.forum_topic_created:
+        return message.forum_topic_created.name
+
+    if message.reply_to_message:
+        if message.reply_to_message.forum_topic_created:
+            return message.reply_to_message.forum_topic_created.name
+
+    return None
+
+
+async def ensure_topic_saved(message: types.Message):
+
+    if not message.message_thread_id:
+        return
+
+    name = await detect_topic(message)
+
+    if name:
+
+        if not get_topic(message.chat.id, message.message_thread_id):
+
+            save_topic(
+                message.chat.id,
+                message.message_thread_id,
+                name
+            )
 
 # ---------- STATUS TEXT ----------
 
@@ -213,6 +245,13 @@ async def save_nick(message: types.Message, state: FSMContext):
         f"Ник сохранён: {nick}",
         reply_markup=user_menu
     )
+
+
+@dp.message()
+async def topic_watcher(message: types.Message):
+
+    await ensure_topic_saved(message)
+
 
 # ---------- MY NICK ----------
 
@@ -361,7 +400,16 @@ async def toggle_actor(callback: types.CallbackQuery):
 @dp.callback_query(F.data.startswith("send:"))
 async def send_task(callback: types.CallbackQuery):
 
-    topic_name = await get_topic_name(callback.message)
+    message_id = int(callback.data.split(":")[1])
+    selected = actor_selection.get(message_id, [])
+
+    chat_id = callback.message.chat.id
+    thread_id = callback.message.message_thread_id
+
+    topic_name = get_topic(
+        chat_id,
+        thread_id
+    ) or "Без темы"
     
     message_id = int(callback.data.split(":")[1])
     selected = actor_selection.get(message_id, [])
