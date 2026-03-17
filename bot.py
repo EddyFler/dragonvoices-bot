@@ -138,15 +138,16 @@ def get_actor_id_by_nick(nick):
 
 async def get_topic_name(message: types.Message):
 
-    if message.reply_to_message:
-        if message.reply_to_message.forum_topic_created:
-            return message.reply_to_message.forum_topic_created.name
+    if message.chat.type == "supergroup" and message.message_thread_id:
 
-    if message.forum_topic_created:
-        return message.forum_topic_created.name
-
-    if message.forum_topic_edited:
-        return message.forum_topic_edited.name
+        try:
+            topic = await bot.get_forum_topic(
+                chat_id=message.chat.id,
+                message_thread_id=message.message_thread_id
+            )
+            return topic.name
+        except:
+            pass
 
     return None
 
