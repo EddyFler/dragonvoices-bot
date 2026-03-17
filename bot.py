@@ -137,11 +137,12 @@ def get_actor_id_by_nick(nick):
 
 def build_status(task_id):
 
-    lines = ["📊 Статусы актёров\n"]
+    lines = ["📊 Статусы актёров", ""]
 
     for user_id, status in task_status[task_id].items():
 
         nick = find_actor_by_id(user_id)
+
         if not nick:
             nick = f"id:{user_id}"
 
@@ -374,6 +375,7 @@ async def send_task(callback: types.CallbackQuery):
     status_msg = await bot.send_message(
         chat_id=chat_id,
         message_thread_id=thread_id,
+        reply_to_message_id=message_id,
         text=build_status(task_id)
     )
 
