@@ -229,16 +229,14 @@ async def process_change(message: types.Message, state: FSMContext):
 
 # ---------- SUBTITLES ----------
 
-def is_subtitles(message):
+# ---------- SUBTITLES ----------
+
+def is_subtitles(message: types.Message):
 
     if not message.document:
         return False
 
-    name = message.document.file_name
-    if not name:
-        return False
-
-    name = name.lower()
+    name = message.document.file_name.lower()
 
     return name.endswith(".srt") or name.endswith(".ass") or name.endswith(".txt")
 
@@ -264,7 +262,6 @@ async def subtitles_detect(message: types.Message):
         "🎬 Панель серии",
         reply_markup=keyboard
     )
-
 
 # ---------- ACTOR MENU ----------
 
