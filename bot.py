@@ -64,6 +64,7 @@ actor_selection = {}
 task_status = {}
 status_messages = {}
 task_meta = {}
+actor_messages = {}
 
 
 # ---------- FSM ----------
@@ -405,11 +406,13 @@ async def send_task(callback: types.CallbackQuery):
             message_id=message_id
         )
 
-        await bot.send_message(
+        msg = await bot.send_message(
             user_id,
-            "🎙 Вам пришло на озвучку\n\nСтатус: ⏳ ожидание",
+            "🎙 Вам пришло на озвучку\n\nСтатус: ⏳",
             reply_markup=keyboard
         )
+
+        actor_messages[(task_id, user_id)] = msg.message_id
 
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
 
@@ -431,17 +434,14 @@ async def update_status(callback, task_id, user_id, status):
             message_id=msg_id
         )
 
-    task = tasks.get(task_id)
+    actor_msg = actor_messages.get((task_id, user_id))
 
-    if task:
+    if actor_msg:
 
-        user = callback.from_user.username or callback.from_user.first_name
-
-        await bot.send_message(
-            chat_id=task["chat"],
-            message_thread_id=task["thread"],
-            reply_to_message_id=task["original"],
-            text=f"{status} @{user}\n🔗 {task['link']}"
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=actor_msg,
+            text=f"🎙 Вам пришло на озвучку\n\nСтатус: {status}"
         )
 
 
