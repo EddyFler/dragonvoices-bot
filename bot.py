@@ -197,6 +197,42 @@ async def save_nick(message: types.Message, state: FSMContext):
         reply_markup=user_menu
     )
 
+# ---------- MY NICK ----------
+
+@dp.message(F.text == "🎭 Мой ник")
+async def my_nick(message: types.Message):
+
+    nick = find_actor_by_id(message.from_user.id)
+
+    if nick:
+        await message.answer(f"Твой ник: {nick}")
+    else:
+        await message.answer("Ты ещё не зарегистрирован.")
+
+
+# ---------- CHANGE NICK ----------
+
+@dp.message(F.text == "✏ Сменить ник")
+async def change_nick(message: types.Message, state: FSMContext):
+
+    await state.set_state(ChangeNick.entering_new_nick)
+    await message.answer("Введи новый ник.")
+
+
+@dp.message(ChangeNick.entering_new_nick)
+async def process_change(message: types.Message, state: FSMContext):
+
+    new_nick = message.text.strip()
+
+    update_actor(message.from_user.id, new_nick)
+
+    await state.clear()
+
+    await message.answer(
+        f"Ник изменён на: {new_nick}",
+        reply_markup=user_menu
+    )
+
 
 # ---------- SUBTITLES ----------
 
