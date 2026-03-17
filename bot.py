@@ -247,10 +247,7 @@ async def save_nick(message: types.Message, state: FSMContext):
     )
 
 
-@dp.message()
-async def topic_watcher(message: types.Message):
 
-    await ensure_topic_saved(message)
 
 
 # ---------- MY NICK ----------
@@ -552,6 +549,11 @@ async def skip(callback: types.CallbackQuery):
     _, task_id, user_id = callback.data.split(":")
     await update_status(callback, task_id, int(user_id), "❌")
     await callback.answer()
+
+@dp.message()
+async def topic_watcher(message: types.Message):
+
+    await ensure_topic_saved(message)
 
 
 # ---------- WEBHOOK ----------
