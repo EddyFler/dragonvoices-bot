@@ -152,52 +152,6 @@ def build_status(task_id):
     return "\n".join(lines)
 
 
-# ---------- COMMANDS ----------
-
-@dp.message(Command("ping"))
-async def ping(message: types.Message):
-    await message.answer("pong")
-
-
-# ---------- START ----------
-
-@dp.message(Command("start"))
-@dp.message(F.text == "▶ Старт")
-async def start(message: types.Message, state: FSMContext):
-
-    nick = find_actor_by_id(message.from_user.id)
-
-    if nick:
-
-        await message.answer(
-            f"Ты уже зарегистрирован как: {nick}",
-            reply_markup=user_menu
-        )
-        return
-
-    await state.set_state(Register.entering_nick)
-    await message.answer("Введи свой ник актёра.")
-
-
-@dp.message(Register.entering_nick)
-async def save_nick(message: types.Message, state: FSMContext):
-
-    nick = message.text.strip()
-
-    save_actor(
-        message.from_user.id,
-        nick,
-        message.from_user.username
-    )
-
-    await state.clear()
-
-    await message.answer(
-        f"Ник сохранён: {nick}",
-        reply_markup=user_menu
-    )
-
-
 # ---------- SUBTITLES ----------
 
 def is_subtitles(message: types.Message):
@@ -281,6 +235,8 @@ async def open_actor_menu(callback: types.CallbackQuery):
         reply_markup=keyboard
     )
 
+    await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("toggle:"))
 async def toggle_actor(callback: types.CallbackQuery):
@@ -299,6 +255,7 @@ async def toggle_actor(callback: types.CallbackQuery):
     keyboard = build_actor_menu(message_id)
 
     await callback.message.edit_reply_markup(reply_markup=keyboard)
+    await callback.answer()
 
 
 # ---------- SEND TASK ----------
@@ -378,11 +335,12 @@ async def send_task(callback: types.CallbackQuery):
         actor_messages[(task_id, user_id)] = msg.message_id
 
     await callback.message.edit_text("✅ Задание отправлено актёрам.")
+    await callback.answer()
 
 
 # ---------- UPDATE STATUS ----------
 
-async def update_status(callback, task_id, user_id, status):
+async def update_status(task_id, user_id, status):
 
     task_status[task_id][user_id] = status
 
@@ -426,7 +384,7 @@ async def update_status(callback, task_id, user_id, status):
 async def seen(callback: types.CallbackQuery):
 
     _, task_id, user_id = callback.data.split(":")
-    await update_status(callback, task_id, int(user_id), "👀")
+    await update_status(task_id, int(user_id), "👀")
     await callback.answer()
 
 
@@ -434,7 +392,7 @@ async def seen(callback: types.CallbackQuery):
 async def done(callback: types.CallbackQuery):
 
     _, task_id, user_id = callback.data.split(":")
-    await update_status(callback, task_id, int(user_id), "✅")
+    await update_status(task_id, int(user_id), "✅")
     await callback.answer()
 
 
@@ -442,7 +400,7 @@ async def done(callback: types.CallbackQuery):
 async def skip(callback: types.CallbackQuery):
 
     _, task_id, user_id = callback.data.split(":")
-    await update_status(callback, task_id, int(user_id), "❌")
+    await update_status(task_id, int(user_id), "❌")
     await callback.answer()
 
 
