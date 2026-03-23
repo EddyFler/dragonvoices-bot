@@ -361,6 +361,7 @@ async def check_all_done(task_id: str):
             except Exception as e:
                 logging.warning(f"Не удалось переслать файл от {uid}: {e}")
 
+
     # ТЗ1 п.6: пересылаем субтитры звукарю
     subtitles = subtitles_store.get(task_id)
     logging.info(f"check_all_done: task_id={task_id}, subtitles_store keys={list(subtitles_store.keys())}, found={subtitles}")
@@ -720,6 +721,12 @@ def build_se_menu(task_id):
             callback_data=f"se_confirm:{task_id}"
         )
     ])
+    buttons.append([
+        InlineKeyboardButton(
+            text="⏭ Пропустить",
+            callback_data=f"se_skip:{task_id}"
+        )
+    ])
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
@@ -788,6 +795,13 @@ async def se_confirm(callback: types.CallbackQuery):
 
 
 # ---------- SE DONE / SE REJECT (ТЗ1 п.4) ----------
+
+@dp.callback_query(F.data.startswith("se_skip:"))
+async def se_skip(callback: types.CallbackQuery):
+    task_id = callback.data.split(":", 1)[1]
+    await callback.message.edit_text("⏭ Звукорежиссёр не назначен.")
+    await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("se_done:"))
 async def se_done(callback: types.CallbackQuery):
