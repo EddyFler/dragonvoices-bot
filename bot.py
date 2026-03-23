@@ -56,6 +56,7 @@ spreadsheet = client.open_by_key("1yZgjuvatvSur-pxpOq3lA9Lzc3GRovcJnMK1qHFP-i0")
 
 actors_sheet = spreadsheet.worksheet("actors")
 topics_sheet = spreadsheet.worksheet("topics")
+se_sheet = spreadsheet.worksheet("sound_engineers")  # ТЗ1 п.7: новый лист
 
 
 # ---------- STORAGE ----------
@@ -74,6 +75,7 @@ sound_engineers = {}     # task_id -> user_id (int)
 se_selection = {}        # task_id -> nick или None
 se_status_messages = {}  # task_id -> {"user_id": ..., "msg_id": ...}
 reminder_store = {}      # (task_id, user_id, label) -> asyncio.Task
+subtitles_store = {}     # task_id -> {"chat_id": ..., "message_id": ...}  ТЗ1 п.5 / ТЗ2 п.3
 
 
 # ---------- FSM ----------
@@ -135,6 +137,21 @@ def get_actor_id_by_nick(nick):
     return None
 
 
+# ---------- SOUND ENGINEERS (ТЗ1 п.7) ----------
+
+def get_all_sound_engineers():
+    rows = se_sheet.get_all_records()
+    return [r["nick"] for r in rows]
+
+
+def get_se_id_by_nick(nick):
+    rows = se_sheet.get_all_records()
+    for r in rows:
+        if r["nick"] == nick:
+            return int(r["user_id"])
+    return None
+
+
 # ---------- TOPICS ----------
 
 def save_topic(chat_id, thread_id, name):
@@ -167,13 +184,15 @@ async def ensure_topic_saved(message: types.Message):
             save_topic(message.chat.id, message.message_thread_id, name)
 
 
-# ---------- STATUS TEXT ----------
+# ---------- STATUS TEXT (ТЗ1 п.10, п.11: кликабельные ники) ----------
 
 def build_status(task_id):
     lines = ["📊 Статусы актёров", ""]
     for user_id, status in task_status[task_id].items():
         nick = find_actor_by_id(user_id) or f"id:{user_id}"
-        lines.append(f"{nick} — {status}")
+        # ТЗ1 п.10: ник как кликабельная ссылка
+        nick_link = f'<a href="tg://user?id={user_id}">{nick}</a>'
+        lines.append(f"{nick_link} — {status}")
     return "\n".join(lines)
 
 
@@ -205,22 +224,53 @@ def parse_deadline(deadline_str: str):
     return None
 
 
-# ---------- REMINDERS ----------
+# ---------- REMINDERS (ТЗ2: улучшенные напоминания) ----------
 
 async def _reminder_coroutine(
     delay: float, user_id: int, task_id: str,
     topic_name: str, deadline_str: str, hours_before: int
 ):
     await asyncio.sleep(delay)
+
     # Отправляем только если задание ещё не завершено
     status = task_status.get(task_id, {}).get(user_id, "")
     if status and not status.startswith("✅") and not status.startswith("❌"):
+        task_link = tasks.get(task_id, {}).get("link", "")
+
+        # ТЗ2 п.1, п.2: кнопка + HTML-ссылка
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [InlineKeyboardButton(text="📂 Открыть сообщение", url=task_link)],
+                [
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
+                ]
+            ]
+        )
+
+        # ТЗ2 п.4: структура напоминания
         await bot.send_message(
             user_id,
-            f"⏰ Напоминание!\n\n"
-            f"До сдачи записи для серии «{topic_name}» осталось {hours_before} ч.\n"
-            f"Дедлайн: {deadline_str}"
+            f"⏰ <b>Напоминание!</b>\n\n"
+            f"До сдачи записи для серии «{topic_name}» осталось <b>{hours_before} ч.</b>\n"
+            f"Дедлайн: <b>{deadline_str}</b>\n\n"
+            f'<a href="{task_link}">📂 Открыть задание</a>',
+            parse_mode="HTML",
+            reply_markup=keyboard
         )
+
+        # ТЗ2 п.3: прикреплять субтитры если есть
+        subtitles = subtitles_store.get(task_id)
+        if subtitles:
+            await bot.send_message(user_id, "📄 Субтитры:")
+            try:
+                await bot.copy_message(
+                    chat_id=user_id,
+                    from_chat_id=subtitles["chat_id"],
+                    message_id=subtitles["message_id"]
+                )
+            except Exception as e:
+                logging.warning(f"Не удалось переслать субтитры актёру {user_id}: {e}")
 
 
 def schedule_reminders(task_id: str, user_id: int, deadline_str: str):
@@ -243,7 +293,7 @@ def schedule_reminders(task_id: str, user_id: int, deadline_str: str):
             reminder_store[key] = t
 
 
-# ---------- ALL DONE CHECK ----------
+# ---------- ALL DONE CHECK (ТЗ1 п.3, п.4, п.6) ----------
 
 async def check_all_done(task_id: str):
     """Проверяет, все ли актёры завершили работу. Если да — уведомляет звукорежиссёра."""
@@ -262,14 +312,30 @@ async def check_all_done(task_id: str):
         return
 
     topic_name = tasks.get(task_id, {}).get("topic", "Без темы")
+    task_link = tasks.get(task_id, {}).get("link", "")
 
+    # ТЗ1 п.4: кнопки управления для звукорежиссёра
+    se_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📂 Открыть задание", url=task_link)],
+            [
+                InlineKeyboardButton(text="✅ Серия сдана", callback_data=f"se_done:{task_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"se_reject:{task_id}")
+            ]
+        ]
+    )
+
+    # ТЗ1 п.9: HTML-ссылка в тексте + parse_mode
     await bot.send_message(
         se_user_id,
         f"🎚 Серия «{topic_name}» готова к сведению!\n\n"
-        f"Все актёры завершили работу:\n\n{build_status(task_id)}"
+        f"Все актёры завершили работу:\n\n{build_status(task_id)}\n\n"
+        f'<a href="{task_link}">📂 Открыть задание</a>',
+        parse_mode="HTML",
+        reply_markup=se_keyboard
     )
 
-    # Пересылаем все файлы звукарю
+    # ТЗ1 п.3: пересылаем все файлы/записи звукарю ТОЛЬКО после завершения всех
     for (tid, uid), rec in recordings.items():
         if tid != task_id:
             continue
@@ -287,6 +353,19 @@ async def check_all_done(task_id: str):
         elif rec["type"] == "link":
             await bot.send_message(se_user_id, f"🔗 Запись от {nick}: {rec['content']}")
 
+    # ТЗ1 п.6: пересылаем субтитры звукарю
+    subtitles = subtitles_store.get(task_id)
+    if subtitles:
+        await bot.send_message(se_user_id, "📄 Субтитры:")
+        try:
+            await bot.copy_message(
+                chat_id=se_user_id,
+                from_chat_id=subtitles["chat_id"],
+                message_id=subtitles["message_id"]
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось переслать субтитры звукарю: {e}")
+
 
 # ---------- REFRESH HELPERS ----------
 
@@ -299,7 +378,8 @@ async def refresh_group_status(task_id: str):
             await bot.edit_message_text(
                 text=build_status(task_id),
                 chat_id=chat_id,
-                message_id=msg_id
+                message_id=msg_id,
+                parse_mode="HTML"  # ТЗ1 п.10: parse_mode для кликабельных ников
             )
         except Exception:
             pass
@@ -312,7 +392,8 @@ async def refresh_group_status(task_id: str):
             await bot.edit_message_text(
                 chat_id=se_info["user_id"],
                 message_id=se_info["msg_id"],
-                text=f"📊 Статус серии «{topic_name}»:\n\n{build_status(task_id)}"
+                text=f"📊 Статус серии «{topic_name}»:\n\n{build_status(task_id)}",
+                parse_mode="HTML"  # ТЗ1 п.10: parse_mode для кликабельных ников
             )
         except Exception:
             pass
@@ -323,9 +404,10 @@ async def refresh_actor_message(task_id: str, user_id: int, status: str):
     actor_msg = actor_messages.get((task_id, user_id))
     if not actor_msg:
         return
+    task_link = tasks[task_id]["link"]
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📂 Открыть сообщение", url=tasks[task_id]["link"])],
+            [InlineKeyboardButton(text="📂 Открыть сообщение", url=task_link)],
             [
                 InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
                 InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
@@ -455,7 +537,7 @@ async def process_deadline(message: types.Message, state: FSMContext):
     await refresh_group_status(task_id)
 
 
-# ---------- DONE → ЗАПИСЬ ----------
+# ---------- DONE → ЗАПИСЬ (ТЗ1 п.1, п.2) ----------
 
 @dp.callback_query(F.data.startswith("done:"))
 async def done(callback: types.CallbackQuery, state: FSMContext):
@@ -474,6 +556,8 @@ async def process_recording(message: types.Message, state: FSMContext):
     data = await state.get_data()
     task_id = data["task_id"]
     user_id = int(data["user_id"])
+
+    nick = find_actor_by_id(user_id) or f"id:{user_id}"
 
     if message.document or message.audio or message.voice or message.video:
         file_obj = message.document or message.audio or message.voice or message.video
@@ -500,14 +584,31 @@ async def process_recording(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Запись принята!")
 
+    # ТЗ1 п.2: отправляем запись в рабочую беседу (группу)
+    chat_id, thread_id = task_meta.get(task_id, (None, None))
+    if chat_id:
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                text=f"🎤 Запись от {nick}:"
+            )
+            await bot.copy_message(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                from_chat_id=message.chat.id,
+                message_id=message.message_id
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось отправить запись в группу от {user_id}: {e}")
+
     await refresh_actor_message(task_id, user_id, status)
     await refresh_group_status(task_id)
+    # ТЗ1 п.1: звукорежиссёр НЕ получает файл сразу — только в check_all_done
     await check_all_done(task_id)
 
 
-# ---------- SUBTITLES ----------
-# StateFilter(None) — срабатывает только вне FSM-состояний,
-# чтобы не перехватывать файлы у актёров в режиме DoneState
+# ---------- SUBTITLES (ТЗ1 п.5) ----------
 
 def is_subtitles(message: types.Message):
     if not message.document:
@@ -520,6 +621,7 @@ def is_subtitles(message: types.Message):
 async def subtitles_detect(message: types.Message):
     if not is_subtitles(message):
         return
+
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -530,7 +632,14 @@ async def subtitles_detect(message: types.Message):
             ]
         ]
     )
-    await message.reply("🎬 Панель серии", reply_markup=keyboard)
+    reply = await message.reply("🎬 Панель серии", reply_markup=keyboard)
+
+    # ТЗ1 п.5: сохраняем субтитры — привязываем к message_id панели (task_id будет известен после send_task)
+    # Временно сохраняем под ключом исходного message_id субтитров
+    subtitles_store[str(message.message_id)] = {
+        "chat_id": message.chat.id,
+        "message_id": message.message_id
+    }
 
 
 # ---------- ACTOR MENU ----------
@@ -579,13 +688,14 @@ async def toggle_actor(callback: types.CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=keyboard)
 
 
-# ---------- SOUND ENGINEER MENU ----------
+# ---------- SOUND ENGINEER MENU (ТЗ1 п.8) ----------
 
 def build_se_menu(task_id):
     buttons = []
-    actors = get_all_actors()
+    # ТЗ1 п.8: используем sound_engineers лист
+    engineers = get_all_sound_engineers()
     selected = se_selection.get(task_id)
-    for name in actors:
+    for name in engineers:
         mark = "☑" if selected == name else "☐"
         buttons.append([
             InlineKeyboardButton(
@@ -619,7 +729,8 @@ async def se_confirm(callback: types.CallbackQuery):
     if not selected_nick:
         await callback.answer("Выберите звукорежиссёра.")
         return
-    se_user_id = get_actor_id_by_nick(selected_nick)
+    # ТЗ1 п.8: используем get_se_id_by_nick вместо get_actor_id_by_nick
+    se_user_id = get_se_id_by_nick(selected_nick)
     if not se_user_id:
         await callback.answer("Звукорежиссёр не найден.")
         return
@@ -631,11 +742,48 @@ async def se_confirm(callback: types.CallbackQuery):
     msg = await bot.send_message(
         se_user_id,
         f"🎚 Вы назначены звукорежиссёром серии «{topic_name}»\n\n"
-        f"{build_status(task_id)}"
+        f"{build_status(task_id)}",
+        parse_mode="HTML"  # ТЗ1 п.10: кликабельные ники в статусе
     )
     se_status_messages[task_id] = {"user_id": se_user_id, "msg_id": msg.message_id}
 
     await callback.message.edit_text(f"✅ Звукорежиссёр назначен: {selected_nick}")
+    await callback.answer()
+
+
+# ---------- SE DONE / SE REJECT (ТЗ1 п.4) ----------
+
+@dp.callback_query(F.data.startswith("se_done:"))
+async def se_done(callback: types.CallbackQuery):
+    task_id = callback.data.split(":", 1)[1]
+    topic_name = tasks.get(task_id, {}).get("topic", "Без темы")
+    chat_id, thread_id = task_meta.get(task_id, (None, None))
+
+    if chat_id:
+        await bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            text=f"✅ Серия «{topic_name}» сдана звукорежиссёром!"
+        )
+
+    await callback.message.edit_text(f"✅ Серия «{topic_name}» отмечена как сданная.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("se_reject:"))
+async def se_reject(callback: types.CallbackQuery):
+    task_id = callback.data.split(":", 1)[1]
+    topic_name = tasks.get(task_id, {}).get("topic", "Без темы")
+    chat_id, thread_id = task_meta.get(task_id, (None, None))
+
+    if chat_id:
+        await bot.send_message(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            text=f"❌ Серия «{topic_name}» отклонена звукорежиссёром."
+        )
+
+    await callback.message.edit_text(f"❌ Серия «{topic_name}» отклонена.")
     await callback.answer()
 
 
@@ -668,6 +816,10 @@ async def send_task(callback: types.CallbackQuery):
     }
     task_status[task_id] = {}
 
+    # ТЗ1 п.5: переносим субтитры с временного ключа на task_id
+    if str(message_id) in subtitles_store:
+        subtitles_store[task_id] = subtitles_store.pop(str(message_id))
+
     for actor_name in selected:
         user_id = get_actor_id_by_nick(actor_name)
         task_status[task_id][user_id] = "⏳"
@@ -676,13 +828,15 @@ async def send_task(callback: types.CallbackQuery):
         chat_id=chat_id,
         message_thread_id=thread_id,
         reply_to_message_id=message_id,
-        text=build_status(task_id)
+        text=build_status(task_id),
+        parse_mode="HTML"  # ТЗ1 п.10: кликабельные ники
     )
     status_messages[task_id] = status_msg.message_id
     task_meta[task_id] = (chat_id, thread_id)
 
     for actor_name in selected:
         user_id = get_actor_id_by_nick(actor_name)
+        # ТЗ1 п.9: кликабельная ссылка в кнопке (уже была) + HTML parse_mode
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
                 [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
@@ -698,7 +852,9 @@ async def send_task(callback: types.CallbackQuery):
             user_id,
             f"🎙 Вам пришло на озвучку\n\n"
             f"📂 Тема: {topic_name}\n\n"
+            f'<a href="{message_link}">📂 Открыть задание</a>\n\n'
             f"Статус: ⏳",
+            parse_mode="HTML",  # ТЗ1 п.9: кликабельная ссылка
             reply_markup=keyboard
         )
         actor_messages[(task_id, user_id)] = msg.message_id
