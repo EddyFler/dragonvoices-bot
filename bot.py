@@ -750,16 +750,54 @@ async def se_confirm(callback: types.CallbackQuery):
 
     sound_engineers[task_id] = se_user_id
     topic_name = tasks.get(task_id, {}).get("topic", "Без темы")
+    task_link = tasks.get(task_id, {}).get("link", "")
 
-    # Отправляем звукарю начальный статус
+    # Кнопки в стиле актёрского сообщения
+    se_keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [InlineKeyboardButton(text="📂 Открыть сообщение", url=task_link)],
+            [
+                InlineKeyboardButton(text="✅ Серия сдана", callback_data=f"se_done:{task_id}"),
+                InlineKeyboardButton(text="❌ Отклонить", callback_data=f"se_reject:{task_id}")
+            ]
+        ]
+    )
+
+    # Сначала пересылаем само сообщение с субтитрами (как актёрам copy_message)
+    chat_id_task, thread_id_task = task_meta.get(task_id, (None, None))
+    original_msg_id = tasks.get(task_id, {}).get("original")
+    if chat_id_task and original_msg_id:
+        await bot.copy_message(
+            chat_id=se_user_id,
+            from_chat_id=chat_id_task,
+            message_id=original_msg_id
+        )
+
+    # Затем статусное сообщение с кнопками — точь-в-точь как у актёров
     msg = await bot.send_message(
         se_user_id,
-        f"🎚 Вы назначены звукорежиссёром серии «{topic_name}»\n\n"
-        f"{build_status(task_id)}",
+        f"🎚 Вы назначены звукорежиссёром\n\n"
+        f"📂 Тема: {topic_name}\n\n"
+        f'<a href="{task_link}">📂 Открыть сообщение</a>\n\n'
+        f"Статус: {build_status(task_id)}",
         parse_mode="HTML",
-        link_preview_options=LinkPreviewOptions(is_disabled=True)
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
+        reply_markup=se_keyboard
     )
     se_status_messages[task_id] = {"user_id": se_user_id, "msg_id": msg.message_id}
+
+    # Пересылаем субтитры звукарю сразу при назначении (если есть)
+    subtitles = subtitles_store.get(task_id)
+    if subtitles:
+        await bot.send_message(se_user_id, "📄 Субтитры:")
+        try:
+            await bot.copy_message(
+                chat_id=se_user_id,
+                from_chat_id=subtitles["chat_id"],
+                message_id=subtitles["message_id"]
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось переслать субтитры звукарю при назначении: {e}")
 
     await callback.message.edit_text(f"✅ Звукорежиссёр назначен: {selected_nick}")
     await callback.answer()
