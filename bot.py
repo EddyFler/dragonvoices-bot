@@ -360,8 +360,6 @@ async def check_all_done(task_id: str):
                 )
             except Exception as e:
                 logging.warning(f"Не удалось переслать файл от {uid}: {e}")
-        elif rec["type"] == "link":
-            await bot.send_message(se_user_id, f"🔗 Запись от {nick}: {rec['content']}")
 
     # ТЗ1 п.6: пересылаем субтитры звукарю
     subtitles = subtitles_store.get(task_id)
@@ -778,7 +776,6 @@ async def se_confirm(callback: types.CallbackQuery):
         se_user_id,
         f"🎚 Вы назначены звукорежиссёром\n\n"
         f"📂 Тема: {topic_name}\n\n"
-        f'<a href="{task_link}">📂 Открыть сообщение</a>\n\n'
         f"Статус: {build_status(task_id)}",
         parse_mode="HTML",
         link_preview_options=LinkPreviewOptions(is_disabled=True),
