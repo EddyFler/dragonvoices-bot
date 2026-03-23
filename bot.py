@@ -326,7 +326,6 @@ async def check_all_done(task_id: str):
     # ТЗ1 п.4: кнопки управления для звукорежиссёра
     se_keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="📂 Открыть задание", url=task_link)],
             [
                 InlineKeyboardButton(text="✅ Серия сдана", callback_data=f"se_done:{task_id}"),
                 InlineKeyboardButton(text="❌ Отклонить", callback_data=f"se_reject:{task_id}")
@@ -334,12 +333,23 @@ async def check_all_done(task_id: str):
         ]
     )
 
-    # ТЗ1 п.9: HTML-ссылка в тексте + parse_mode
+    # Субтитры идут первыми — как в "Вам пришло на озвучку"
+    subtitles = subtitles_store.get(task_id)
+    logging.info(f"check_all_done: task_id={task_id}, subtitles_store keys={list(subtitles_store.keys())}, found={subtitles}")
+    if subtitles:
+        try:
+            await bot.copy_message(
+                chat_id=se_user_id,
+                from_chat_id=subtitles["chat_id"],
+                message_id=subtitles["message_id"]
+            )
+        except Exception as e:
+            logging.warning(f"Не удалось переслать субтитры звукарю: {e}")
+
     await bot.send_message(
         se_user_id,
         f"🎚 Серия «{topic_name}» готова к сведению!\n\n"
-        f"Все актёры завершили работу:\n\n{build_status(task_id)}\n\n"
-        f'<a href="{task_link}">📂 Открыть задание</a>',
+        f"Все актёры завершили работу:\n\n{build_status(task_id)}",
         parse_mode="HTML",
         link_preview_options=LinkPreviewOptions(is_disabled=True),
         reply_markup=se_keyboard
@@ -360,21 +370,6 @@ async def check_all_done(task_id: str):
                 )
             except Exception as e:
                 logging.warning(f"Не удалось переслать файл от {uid}: {e}")
-
-
-    # ТЗ1 п.6: пересылаем субтитры звукарю
-    subtitles = subtitles_store.get(task_id)
-    logging.info(f"check_all_done: task_id={task_id}, subtitles_store keys={list(subtitles_store.keys())}, found={subtitles}")
-    if subtitles:
-        await bot.send_message(se_user_id, "📄 Субтитры:")
-        try:
-            await bot.copy_message(
-                chat_id=se_user_id,
-                from_chat_id=subtitles["chat_id"],
-                message_id=subtitles["message_id"]
-            )
-        except Exception as e:
-            logging.warning(f"Не удалось переслать субтитры звукарю: {e}")
 
 
 # ---------- REFRESH HELPERS ----------
@@ -436,6 +431,8 @@ async def refresh_actor_message(task_id: str, user_id: int, status: str):
                 f"📂 Тема: {tasks[task_id]['topic']}\n\n"
                 f"Статус: {status}"
             ),
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
             reply_markup=keyboard
         )
     except Exception:
@@ -590,7 +587,11 @@ async def process_recording(message: types.Message, state: FSMContext):
         await message.answer("Пожалуйста, отправь ссылку или прикрепи файл.")
         return
 
-    status = f"✅ {recording_label}"
+    # Если ссылка — показываем кликабельное слово «Ссылка», не raw URL
+    if recordings[(task_id, user_id)]["type"] == "link":
+        status = f'✅ <a href="{recording_label}">Ссылка</a>'
+    else:
+        status = f"✅ {recording_label}"
     task_status[task_id][user_id] = status
 
     await state.clear()
