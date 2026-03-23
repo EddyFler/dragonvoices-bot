@@ -786,19 +786,6 @@ async def se_confirm(callback: types.CallbackQuery):
     )
     se_status_messages[task_id] = {"user_id": se_user_id, "msg_id": msg.message_id}
 
-    # Пересылаем субтитры звукарю сразу при назначении (если есть)
-    subtitles = subtitles_store.get(task_id)
-    if subtitles:
-        await bot.send_message(se_user_id, "📄 Субтитры:")
-        try:
-            await bot.copy_message(
-                chat_id=se_user_id,
-                from_chat_id=subtitles["chat_id"],
-                message_id=subtitles["message_id"]
-            )
-        except Exception as e:
-            logging.warning(f"Не удалось переслать субтитры звукарю при назначении: {e}")
-
     await callback.message.edit_text(f"✅ Звукорежиссёр назначен: {selected_nick}")
     await callback.answer()
 
