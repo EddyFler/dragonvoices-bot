@@ -13,6 +13,7 @@ from aiogram.types import (
     InlineKeyboardButton,
     ReplyKeyboardMarkup,
     KeyboardButton,
+    LinkPreviewOptions,
     Update
 )
 from aiogram.filters import Command, StateFilter
@@ -190,9 +191,16 @@ def build_status(task_id):
     lines = ["📊 Статусы актёров", ""]
     for user_id, status in task_status[task_id].items():
         nick = find_actor_by_id(user_id) or f"id:{user_id}"
-        # ТЗ1 п.10: ник как кликабельная ссылка
         nick_link = f'<a href="tg://user?id={user_id}">{nick}</a>'
-        lines.append(f"{nick_link} — {status}")
+        # Если статус содержит http-ссылку — заменяем на кликабельное слово «Ссылка»
+        if "http" in status:
+            parts = status.split(" ", 1)
+            emoji = parts[0]
+            url = parts[1].strip() if len(parts) > 1 else ""
+            status_display = f'{emoji} <a href="{url}">Ссылка</a>'
+        else:
+            status_display = status
+        lines.append(f"{nick_link} — {status_display}")
     return "\n".join(lines)
 
 
@@ -256,6 +264,7 @@ async def _reminder_coroutine(
             f"Дедлайн: <b>{deadline_str}</b>\n\n"
             f'<a href="{task_link}">📂 Открыть задание</a>',
             parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
             reply_markup=keyboard
         )
 
@@ -332,6 +341,7 @@ async def check_all_done(task_id: str):
         f"Все актёры завершили работу:\n\n{build_status(task_id)}\n\n"
         f'<a href="{task_link}">📂 Открыть задание</a>',
         parse_mode="HTML",
+        link_preview_options=LinkPreviewOptions(is_disabled=True),
         reply_markup=se_keyboard
     )
 
@@ -355,6 +365,7 @@ async def check_all_done(task_id: str):
 
     # ТЗ1 п.6: пересылаем субтитры звукарю
     subtitles = subtitles_store.get(task_id)
+    logging.info(f"check_all_done: task_id={task_id}, subtitles_store keys={list(subtitles_store.keys())}, found={subtitles}")
     if subtitles:
         await bot.send_message(se_user_id, "📄 Субтитры:")
         try:
@@ -379,7 +390,8 @@ async def refresh_group_status(task_id: str):
                 text=build_status(task_id),
                 chat_id=chat_id,
                 message_id=msg_id,
-                parse_mode="HTML"  # ТЗ1 п.10: parse_mode для кликабельных ников
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
         except Exception:
             pass
@@ -393,7 +405,8 @@ async def refresh_group_status(task_id: str):
                 chat_id=se_info["user_id"],
                 message_id=se_info["msg_id"],
                 text=f"📊 Статус серии «{topic_name}»:\n\n{build_status(task_id)}",
-                parse_mode="HTML"  # ТЗ1 п.10: parse_mode для кликабельных ников
+                parse_mode="HTML",
+                link_preview_options=LinkPreviewOptions(is_disabled=True)
             )
         except Exception:
             pass
@@ -743,7 +756,8 @@ async def se_confirm(callback: types.CallbackQuery):
         se_user_id,
         f"🎚 Вы назначены звукорежиссёром серии «{topic_name}»\n\n"
         f"{build_status(task_id)}",
-        parse_mode="HTML"  # ТЗ1 п.10: кликабельные ники в статусе
+        parse_mode="HTML",
+        link_preview_options=LinkPreviewOptions(is_disabled=True)
     )
     se_status_messages[task_id] = {"user_id": se_user_id, "msg_id": msg.message_id}
 
@@ -854,7 +868,8 @@ async def send_task(callback: types.CallbackQuery):
             f"📂 Тема: {topic_name}\n\n"
             f'<a href="{message_link}">📂 Открыть задание</a>\n\n'
             f"Статус: ⏳",
-            parse_mode="HTML",  # ТЗ1 п.9: кликабельная ссылка
+            parse_mode="HTML",
+            link_preview_options=LinkPreviewOptions(is_disabled=True),
             reply_markup=keyboard
         )
         actor_messages[(task_id, user_id)] = msg.message_id
