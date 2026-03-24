@@ -192,8 +192,9 @@ def build_status(task_id):
     for user_id, status in task_status[task_id].items():
         nick = find_actor_by_id(user_id) or f"id:{user_id}"
         nick_link = f'<a href="tg://user?id={user_id}">{nick}</a>'
-        # Если статус содержит http-ссылку — заменяем на кликабельное слово «Ссылка»
-        if "http" in status:
+        # Статус уже содержит готовый HTML (например ✅ <a href="...">Ссылка</a>)
+        # Если статус — raw ссылка (без тега) — оборачиваем. Иначе оставляем как есть.
+        if "http" in status and "<a href" not in status:
             parts = status.split(" ", 1)
             emoji = parts[0]
             url = parts[1].strip() if len(parts) > 1 else ""
@@ -309,10 +310,12 @@ async def check_all_done(task_id: str):
     statuses = task_status.get(task_id, {})
     if not statuses:
         return
+    logging.info(f"check_all_done: task_id={task_id}, statuses={statuses}")
     all_finished = all(
         s.startswith("✅") or s.startswith("❌")
         for s in statuses.values()
     )
+    logging.info(f"check_all_done: all_finished={all_finished}, se_user_id={sound_engineers.get(task_id)}")
     if not all_finished:
         return
 
