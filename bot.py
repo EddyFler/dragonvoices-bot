@@ -609,12 +609,19 @@ async def process_recording(message: types.Message, state: FSMContext):
                 message_thread_id=thread_id,
                 text=f"🎤 Запись от {nick}:"
             )
-            await bot.copy_message(
+            sent = await bot.copy_message(
                 chat_id=chat_id,
                 message_thread_id=thread_id,
                 from_chat_id=message.chat.id,
                 message_id=message.message_id
             )
+            # Если файл — строим ссылку на сообщение в группе и обновляем статус
+            if recordings[(task_id, user_id)]["type"] == "file":
+                chat_str = str(chat_id)
+                chat_link_id = chat_str[4:]
+                group_msg_link = f"https://t.me/c/{chat_link_id}/{sent.message_id}"
+                status = f'✅ <a href="{group_msg_link}">Файл</a>'
+                task_status[task_id][user_id] = status
         except Exception as e:
             logging.warning(f"Не удалось отправить запись в группу от {user_id}: {e}")
 
