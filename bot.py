@@ -262,8 +262,7 @@ async def _reminder_coroutine(
             user_id,
             f"⏰ <b>Напоминание!</b>\n\n"
             f"До сдачи записи для серии «{topic_name}» осталось <b>{hours_before} ч.</b>\n"
-            f"Дедлайн: <b>{deadline_str}</b>\n\n"
-            f'<a href="{task_link}">📂 Открыть задание</a>',
+            f"Дедлайн: <b>{deadline_str}</b>\n\n",
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
             reply_markup=keyboard
@@ -913,7 +912,6 @@ async def send_task(callback: types.CallbackQuery):
             user_id,
             f"🎙 Вам пришло на озвучку\n\n"
             f"📂 Тема: {topic_name}\n\n"
-            f'<a href="{message_link}">📂 Открыть задание</a>\n\n'
             f"Статус: ⏳",
             parse_mode="HTML",
             link_preview_options=LinkPreviewOptions(is_disabled=True),
