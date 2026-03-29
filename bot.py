@@ -173,6 +173,9 @@ async def restore_state():
 
         tasks_data = {}
         for row in rows:
+            if not row.get("task_id") or not row.get("user_id"):
+                continue
+
             tid = str(row["task_id"])
             if tid not in tasks_data:
                 tasks_data[tid] = {
@@ -184,9 +187,10 @@ async def restore_state():
                     "status_msg_id": int(row["status_msg_id"]),
                     "users": []
                 }
+
             tasks_data[tid]["users"].append({
                 "user_id": int(row["user_id"]),
-                "status": row["user_status"],
+                "status": row.get("user_status") or "⏳",
                 "deadline": row["deadline"],
                 "actor_msg_id": int(row["actor_msg_id"]) if row["actor_msg_id"] else None
             })
