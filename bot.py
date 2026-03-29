@@ -62,6 +62,7 @@ topics_sheet = spreadsheet.worksheet("topics")
 se_sheet = spreadsheet.worksheet("sound_engineers")
 active_tasks_sheet = spreadsheet.worksheet("active_tasks")
 history_sheet = spreadsheet.worksheet("history")
+allowed_users_sheet = spreadsheet.worksheet("allowed_users")
 
 
 # ---------- STORAGE ----------
@@ -228,6 +229,11 @@ def find_actor_by_id(user_id):
     return None
 
 
+def is_allowed(user_id):
+    rows = allowed_users_sheet.get_all_records()
+    return any(int(r["user_id"]) == user_id for r in rows)
+
+
 def save_actor(user_id, nick, telegram):
     actors_sheet.append_row([user_id, nick, telegram])
 
@@ -352,8 +358,8 @@ async def _reminder_coroutine(
             inline_keyboard=[
                 [InlineKeyboardButton(text="📂 Открыть сообщение", url=task_link)],
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"s:{task_id}:{user_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"d:{task_id}:{user_id}")
                 ]
             ]
         )
@@ -532,10 +538,10 @@ async def refresh_actor_message(task_id: str, user_id: int, status: str):
         inline_keyboard=[
             [InlineKeyboardButton(text="📂 Открыть сообщение", url=task_link)],
             [
-                InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
-                InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
+                InlineKeyboardButton(text="👀 Увидел", callback_data=f"s:{task_id}:{user_id}"),
+                InlineKeyboardButton(text="🎤 Записано", callback_data=f"d:{task_id}:{user_id}")
             ],
-            [InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{user_id}")]
+            [InlineKeyboardButton(text="❌ Не участвую", callback_data=f"sk:{task_id}:{user_id}")]
         ]
     )
     try:
@@ -570,6 +576,9 @@ async def start(message: types.Message, state: FSMContext):
     nick = find_actor_by_id(message.from_user.id)
     if nick:
         await message.answer(f"Ты уже зарегистрирован как: {nick}", reply_markup=user_menu)
+        return
+    if not is_allowed(message.from_user.id):
+        await message.answer("❌ У тебя нет доступа к боту.")
         return
     await state.set_state(Register.entering_nick)
     await message.answer("Введи свой ник актёра.")
@@ -612,7 +621,7 @@ async def process_change(message: types.Message, state: FSMContext):
 
 # ---------- SEEN → ДЕДЛАЙН ----------
 
-@dp.callback_query(F.data.startswith("seen:"))
+@dp.callback_query(F.data.regexp(r"^s:\d+:\d+$"))
 async def seen(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     task_id, user_id = parts[1], parts[2]
@@ -675,7 +684,7 @@ async def process_deadline(message: types.Message, state: FSMContext):
 
 # ---------- DONE → ЗАПИСЬ ----------
 
-@dp.callback_query(F.data.startswith("done:"))
+@dp.callback_query(F.data.regexp(r"^d:\d+:\d+$"))
 async def done(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     task_id, user_id = parts[1], parts[2]
@@ -1033,10 +1042,10 @@ async def send_task(callback: types.CallbackQuery):
             inline_keyboard=[
                 [InlineKeyboardButton(text="📂 Открыть сообщение", url=message_link)],
                 [
-                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"seen:{task_id}:{user_id}"),
-                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"done:{task_id}:{user_id}")
+                    InlineKeyboardButton(text="👀 Увидел", callback_data=f"s:{task_id}:{user_id}"),
+                    InlineKeyboardButton(text="🎤 Записано", callback_data=f"d:{task_id}:{user_id}")
                 ],
-                [InlineKeyboardButton(text="❌ Не участвую", callback_data=f"skip:{task_id}:{user_id}")]
+                [InlineKeyboardButton(text="❌ Не участвую", callback_data=f"sk:{task_id}:{user_id}")]
             ]
         )
         await bot.copy_message(chat_id=user_id, from_chat_id=chat_id, message_id=message_id)
@@ -1076,7 +1085,7 @@ async def send_task(callback: types.CallbackQuery):
 
 # ---------- SKIP ----------
 
-@dp.callback_query(F.data.startswith("skip:"))
+@dp.callback_query(F.data.regexp(r"^sk:\d+:\d+$"))
 async def skip(callback: types.CallbackQuery):
     parts = callback.data.split(":")
     task_id, user_id = parts[1], int(parts[2])
