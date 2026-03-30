@@ -625,7 +625,7 @@ async def process_change(message: types.Message, state: FSMContext):
 
 # ---------- SEEN → ДЕДЛАЙН ----------
 
-@dp.callback_query(F.data.regexp(r"^s:\d+:\d+$"))
+@dp.callback_query(F.data.regexp(r"^(s|seen):\d+:\d+$"))
 async def seen(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     task_id, user_id = parts[1], parts[2]
@@ -688,7 +688,7 @@ async def process_deadline(message: types.Message, state: FSMContext):
 
 # ---------- DONE → ЗАПИСЬ ----------
 
-@dp.callback_query(F.data.regexp(r"^d:\d+:\d+$"))
+@dp.callback_query(F.data.regexp(r"^(d|done):\d+:\d+$"))
 async def done(callback: types.CallbackQuery, state: FSMContext):
     parts = callback.data.split(":")
     task_id, user_id = parts[1], parts[2]
@@ -1089,7 +1089,7 @@ async def send_task(callback: types.CallbackQuery):
 
 # ---------- SKIP ----------
 
-@dp.callback_query(F.data.regexp(r"^sk:\d+:\d+$"))
+@dp.callback_query(F.data.regexp(r"^(sk|skip):\d+:\d+$"))
 async def skip(callback: types.CallbackQuery):
     parts = callback.data.split(":")
     task_id, user_id = parts[1], int(parts[2])
